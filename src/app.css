@@ -1,0 +1,991 @@
+/* ---------------------------------------------------------------------------
+   Base tokens + shared components. Every colour/space reads from a CSS variable
+   so a thematic skin (see src/lib/theme/skins.ts) can re-style the whole app by
+   overriding these on the .app wrapper. Defaults below = the default skin (the
+   Shared Frame brand, id "daylight") so non-album pages render correctly.
+--------------------------------------------------------------------------- */
+:root {
+	--bg: #f8f5ef;
+	--surface: #fffefb;
+	--surface-2: #eee6f0;
+	--line: #dcd4de;
+	--ink: #302833;
+	--muted: #716574;
+	--accent: #deb878;
+	/* The accent darkened until it reads as text (WCAG AA); skins.ts derives it per album. */
+	--accent-text: #76624f;
+	--accent-ink: #38243d;
+	--radius: 16px;
+	--font: 'Plus Jakarta Sans Variable', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+	--font-brand: 'Fraunces Variable', Georgia, 'Times New Roman', serif;
+	--cover-grad: linear-gradient(160deg, #f6dccd 0%, #eee6f0 45%, #f8f5ef 75%);
+	--max: 540px;
+	--shadow: 0 8px 24px rgba(56, 36, 61, 0.1);
+}
+/* The viewer's dark theme (cookie, rendered into <html data-theme>): the brand's dark
+   roles, i.e. the "plum" skin in skins.ts. Album pages get the same through resolveTokens. */
+:root[data-theme='dark'] {
+	--bg: #211a26;
+	--surface: #302636;
+	--surface-2: #423448;
+	--line: #57445e;
+	--ink: #f8f5ef;
+	--muted: #c3b9c7;
+	--accent-text: #deb878;
+	--cover-grad: linear-gradient(160deg, #3a2a40 0%, #211a26 62%);
+	--shadow: 0 10px 30px rgba(0, 0, 0, 0.4);
+	color-scheme: dark;
+}
+
+* {
+	box-sizing: border-box;
+	-webkit-tap-highlight-color: transparent;
+}
+html,
+body {
+	margin: 0;
+	min-height: 100%;
+}
+body {
+	font-family: var(--font);
+	background: var(--bg);
+	color: var(--ink);
+	line-height: 1.45;
+	overscroll-behavior-y: none;
+	/* native-app feel: no text/UI selection or long-press callouts */
+	-webkit-user-select: none;
+	user-select: none;
+	-webkit-touch-callout: none;
+}
+/* but keep real text fields and the share link selectable */
+input,
+textarea,
+.linkbox {
+	-webkit-user-select: text;
+	user-select: text;
+}
+button {
+	font-family: inherit;
+	cursor: pointer;
+	border: none;
+	background: none;
+	color: inherit;
+}
+a {
+	color: var(--accent-text);
+	text-decoration: none;
+}
+img {
+	display: block;
+}
+input,
+textarea {
+	font-family: inherit;
+}
+
+.app {
+	max-width: var(--max);
+	margin: 0 auto;
+	min-height: 100dvh;
+	background: var(--bg);
+	color: var(--ink);
+	position: relative;
+}
+.with-bar {
+	padding-bottom: 120px;
+}
+
+/* ---- home ---------------------------------------------------------------- */
+.home {
+	padding: 22px 18px 40px;
+}
+.tagline {
+	color: var(--muted);
+	font-size: 14px;
+	margin: 0 0 22px;
+}
+.section-label {
+	font-size: 12px;
+	text-transform: uppercase;
+	letter-spacing: 0.08em;
+	color: var(--muted);
+	margin: 22px 0 10px;
+}
+.album-card {
+	display: flex;
+	align-items: center;
+	padding: 10px;
+	border-radius: var(--radius);
+	background: var(--surface);
+	border: 1px solid var(--line);
+	margin-bottom: 10px;
+}
+.album-link {
+	flex: 1;
+	display: flex;
+	align-items: center;
+	gap: 14px;
+	min-width: 0;
+	color: var(--ink);
+}
+.album-card .thumb {
+	width: 52px;
+	height: 52px;
+	border-radius: 12px;
+	background: var(--cover-grad), var(--surface-2);
+	flex: none;
+	overflow: hidden;
+}
+.album-card .thumb img {
+	width: 100%;
+	height: 100%;
+	object-fit: cover;
+}
+.album-card .meta {
+	flex: 1;
+	min-width: 0;
+}
+.album-card .meta b {
+	font-size: 16px;
+}
+.album-card .meta small {
+	display: block;
+	color: var(--muted);
+	font-size: 12px;
+}
+.album-cog {
+	flex: none;
+	width: 38px;
+	height: 38px;
+	border-radius: 10px;
+	display: grid;
+	place-items: center;
+	color: var(--muted);
+}
+.album-cog:active {
+	background: var(--surface-2);
+}
+.err {
+	color: #d23b3b;
+	font-size: 13px;
+	margin-top: 8px;
+}
+
+.empty-note {
+	color: var(--muted);
+	font-size: 14px;
+	padding: 18px;
+	border: 1px dashed var(--line);
+	border-radius: var(--radius);
+	text-align: center;
+}
+
+/* create-album options */
+.optstoggle {
+	width: 100%;
+	display: flex;
+	justify-content: space-between;
+	align-items: center;
+	margin-top: 16px;
+	padding: 10px 2px;
+	color: var(--accent-text);
+	font-weight: 600;
+	font-size: 14px;
+}
+/* ---- moment breadcrumb chips -------------------------------------------- */
+.chip {
+	white-space: nowrap;
+	padding: 8px 13px;
+	border-radius: 10px;
+	background: var(--surface);
+	border: 1px solid var(--line);
+	color: var(--muted);
+	font-size: 14px;
+	font-weight: 600;
+	flex: none;
+	transition: all 0.15s;
+}
+.chip .n {
+	font-weight: 500;
+	opacity: 0.65;
+	margin-left: 6px;
+	font-size: 12px;
+}
+.chip.active {
+	background: var(--accent);
+	color: var(--accent-ink);
+	border-color: var(--accent);
+}
+/* owner-only "rename this moment" button, sitting right after the selected chip */
+.chipedit {
+	flex: none;
+	width: 32px;
+	height: 32px;
+	margin-left: -2px;
+	border-radius: 10px;
+	display: grid;
+	place-items: center;
+	color: var(--ink);
+	background: var(--surface);
+	border: 1px solid var(--line);
+}
+.chipedit:active {
+	background: var(--surface-2);
+}
+
+/* ---- a moment section ---------------------------------------------------- */
+.moment {
+	padding: 18px 16px 6px;
+	scroll-margin-top: 104px;
+}
+
+.grid {
+	display: grid;
+	grid-template-columns: repeat(3, 1fr);
+	gap: 8px;
+}
+.tile {
+	position: relative;
+	aspect-ratio: 1;
+	border-radius: 14px;
+	overflow: hidden;
+	background: var(--surface-2);
+	border: none;
+	padding: 0;
+	width: 100%;
+	/* hairline frame */
+	box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--ink) 9%, transparent);
+}
+.tile img {
+	width: 100%;
+	height: 100%;
+	object-fit: cover;
+}
+.tile .by {
+	position: absolute;
+	left: 6px;
+	bottom: 6px;
+	font-size: 10px;
+	font-weight: 600;
+	color: #fff;
+	background: rgba(0, 0, 0, 0.45);
+	padding: 2px 7px;
+	border-radius: 999px;
+	backdrop-filter: blur(4px);
+}
+.tile .fav {
+	position: absolute;
+	top: 5px;
+	right: 5px;
+	width: 28px;
+	height: 28px;
+	border-radius: 9px;
+	display: grid;
+	place-items: center;
+	font-size: 15px;
+	background: rgba(0, 0, 0, 0.35);
+	backdrop-filter: blur(4px);
+	color: #fff;
+}
+.tile .fav.on {
+	color: #ffd23f;
+}
+.empty {
+	grid-column: 1 / -1;
+	color: var(--muted);
+	text-align: center;
+	padding: 26px 0;
+	font-size: 14px;
+	border: 1px dashed var(--line);
+	border-radius: 12px;
+}
+
+/* ---- primary action bar -------------------------------------------------- */
+.bar {
+	position: fixed;
+	left: 0;
+	right: 0;
+	bottom: 0;
+	z-index: 40;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	gap: 14px;
+	padding: 14px 16px calc(14px + env(safe-area-inset-bottom));
+	background: linear-gradient(180deg, transparent, var(--bg) 38%);
+	max-width: var(--max);
+	margin: 0 auto;
+}
+.bar .side {
+	width: 52px;
+	height: 52px;
+	border-radius: 14px;
+	background: var(--surface);
+	border: 1px solid var(--line);
+	display: grid;
+	place-items: center;
+	font-size: 20px;
+	box-shadow: var(--shadow);
+}
+.bar .side.on {
+	color: var(--accent-text);
+	border-color: var(--accent);
+}
+.share {
+	flex: 1;
+	max-width: 260px;
+	height: 58px;
+	border-radius: 14px;
+	background: var(--accent);
+	color: var(--accent-ink);
+	font-weight: 800;
+	font-size: 17px;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	gap: 9px;
+	box-shadow: var(--shadow);
+	letter-spacing: -0.01em;
+}
+.share:active {
+	transform: scale(0.98);
+}
+
+/* ---- sheets / modals ----------------------------------------------------- */
+.hint {
+	color: var(--muted);
+	font-size: 13px;
+	margin: 0 0 14px;
+}
+.row {
+	display: flex;
+	align-items: center;
+	gap: 12px;
+	width: 100%;
+	text-align: left;
+	padding: 14px;
+	border-radius: 14px;
+	background: var(--surface-2);
+	margin-bottom: 8px;
+	font-size: 15px;
+	color: var(--ink);
+}
+.row .ic {
+	width: 26px;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	color: var(--ink);
+}
+.primary-icon {
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	gap: 8px;
+}
+.pendingbadge {
+	position: absolute;
+	left: 6px;
+	top: 6px;
+	z-index: 3;
+	font-size: 10px;
+	font-weight: 700;
+	letter-spacing: 0.03em;
+	text-transform: uppercase;
+	color: #fff;
+	background: #c8862a;
+	padding: 3px 7px;
+	border-radius: 7px;
+}
+.tile.pending img,
+.feedcard.pending img {
+	opacity: 0.55;
+}
+.row .m {
+	flex: 1;
+}
+.row .m small {
+	display: block;
+	color: var(--muted);
+	font-size: 12px;
+}
+.row:active {
+	background: var(--line);
+}
+
+label.field {
+	display: block;
+	font-size: 12px;
+	color: var(--muted);
+	margin: 14px 0 6px;
+}
+input[type='text'] {
+	width: 100%;
+	padding: 12px 14px;
+	border-radius: 12px;
+	background: var(--surface-2);
+	border: 1px solid var(--line);
+	color: var(--ink);
+	font-size: 16px;
+}
+.skins {
+	display: flex;
+	gap: 10px;
+	flex-wrap: wrap;
+}
+.skin {
+	display: flex;
+	flex-direction: column;
+	align-items: center;
+	gap: 5px;
+	font-size: 11px;
+	color: var(--muted);
+}
+.skin .chipimg {
+	width: 46px;
+	height: 46px;
+	border-radius: 12px;
+	border: 2px solid var(--line);
+	display: grid;
+	place-items: center;
+}
+.skin .chipimg .dotacc {
+	width: 18px;
+	height: 18px;
+	border-radius: 50%;
+	box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.12);
+}
+.skin.on .chipimg {
+	border-color: var(--accent);
+}
+.primary {
+	width: 100%;
+	margin-top: 16px;
+	padding: 15px;
+	border-radius: 14px;
+	background: var(--accent);
+	color: var(--accent-ink);
+	font-weight: 800;
+	font-size: 16px;
+}
+.ghost {
+	width: 100%;
+	margin-top: 8px;
+	padding: 13px;
+	border-radius: 14px;
+	background: transparent;
+	color: var(--muted);
+}
+
+/* ---- lightbox ------------------------------------------------------------ */
+.lb {
+	position: fixed;
+	inset: 0;
+	z-index: 80;
+	background: rgba(0, 0, 0, 0.92);
+	display: flex;
+	flex-direction: column;
+}
+.lb .top {
+	display: flex;
+	justify-content: space-between;
+	align-items: center;
+	padding: 14px 18px;
+	color: #fff;
+}
+.lb img {
+	flex: 1;
+	width: 100%;
+	object-fit: contain;
+	min-height: 0;
+}
+.lb .acts {
+	display: flex;
+	justify-content: center;
+	gap: 28px;
+	padding: 18px 0 calc(24px + env(safe-area-inset-bottom));
+	color: #fff;
+}
+/* one quiet line under the media: what a video's download is, when and where a photo was taken */
+.lb .lbfacts {
+	margin: 0;
+	padding: 10px 18px 0;
+	text-align: center;
+	font-size: 13px;
+	line-height: 1.4;
+	color: rgba(255, 255, 255, 0.82);
+}
+.lb .acts button {
+	display: flex;
+	flex-direction: column;
+	align-items: center;
+	gap: 5px;
+	color: #fff;
+	font-size: 12px;
+}
+.lb .acts .ico {
+	font-size: 24px;
+}
+.lb .acts .ico.on {
+	color: #ffd23f;
+}
+
+/* ---- toast --------------------------------------------------------------- */
+.toast {
+	position: fixed;
+	left: 50%;
+	bottom: 96px;
+	transform: translate(-50%, 20px);
+	background: var(--ink);
+	color: var(--bg);
+	font-weight: 600;
+	font-size: 14px;
+	padding: 11px 18px;
+	border-radius: 12px;
+	z-index: 90;
+	opacity: 0;
+	pointer-events: none;
+	transition: all 0.25s;
+	box-shadow: var(--shadow);
+	max-width: 90%;
+}
+.toast.show {
+	opacity: 1;
+	transform: translate(-50%, 0);
+}
+
+/* ---- polish -------------------------------------------------------------- */
+select {
+	width: 100%;
+	padding: 12px 14px;
+	border-radius: 12px;
+	background: var(--surface-2);
+	border: 1px solid var(--line);
+	color: var(--ink);
+	font-size: 16px;
+}
+
+.tile-open {
+	position: absolute;
+	inset: 0;
+	width: 100%;
+	height: 100%;
+	padding: 0;
+	border: none;
+	background: none;
+}
+.tile {
+	transition: transform 0.12s ease;
+}
+.tile:active {
+	transform: scale(0.97);
+}
+
+.hero {
+	text-align: center;
+	padding: 34px 22px 14px;
+}
+.hero .big {
+	font-size: 44px;
+}
+.hero h3 {
+	font-family: var(--font-brand);
+	margin: 12px 0 4px;
+	font-size: 21px;
+	font-weight: 600;
+	letter-spacing: -0.01em;
+}
+.hero p {
+	color: var(--muted);
+	font-size: 14px;
+	margin: 0 auto 18px;
+	max-width: 320px;
+}
+
+.qr {
+	display: block;
+	margin: 16px auto 6px;
+	width: 200px;
+	height: 200px;
+	border-radius: 16px;
+	background: #fff;
+	padding: 10px;
+}
+.linkbox {
+	word-break: break-all;
+}
+.intents {
+	display: grid;
+	grid-template-columns: 1fr 1fr;
+	gap: 8px;
+	margin: 6px 0 4px;
+}
+.intent {
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	gap: 6px;
+	padding: 12px;
+	border-radius: 12px;
+	background: var(--surface-2);
+	border: 1px solid var(--line);
+	color: var(--ink);
+	font-weight: 600;
+	font-size: 14px;
+}
+.intent:active {
+	background: var(--line);
+}
+
+.lb .count {
+	opacity: 0.75;
+}
+.lb .nav {
+	position: absolute;
+	top: 50%;
+	transform: translateY(-50%);
+	width: 44px;
+	height: 44px;
+	border-radius: 50%;
+	background: rgba(0, 0, 0, 0.4);
+	color: #fff;
+	font-size: 26px;
+	display: grid;
+	place-items: center;
+	z-index: 2;
+}
+.lb .nav.prev {
+	left: 10px;
+}
+.lb .nav.next {
+	right: 10px;
+}
+.lb .lbdl {
+	display: flex;
+	flex-direction: column;
+	align-items: center;
+	gap: 5px;
+	color: #fff;
+	font-size: 12px;
+}
+
+:focus-visible {
+	outline: 2px solid var(--accent);
+	outline-offset: 2px;
+}
+.chip,
+.row,
+.album-card,
+.share,
+.side,
+.primary,
+.ghost {
+	transition:
+		background 0.15s,
+		transform 0.12s,
+		border-color 0.15s;
+}
+.share:disabled {
+	opacity: 0.7;
+}
+
+/* ---- flat / minimal pass ------------------------------------------------ */
+.tile .by,
+.tile .fav {
+	z-index: 3;
+}
+.chip {
+	padding: 7px 13px;
+}
+.share {
+	height: 52px;
+	font-size: 16px;
+	box-shadow: var(--shadow);
+}
+.bar .side {
+	width: 48px;
+	height: 48px;
+	box-shadow: var(--shadow);
+}
+/* icon with its word underneath */
+.bar .side.labelled {
+	width: auto;
+	min-width: 58px;
+	height: 52px;
+	padding: 0 7px;
+	display: flex;
+	flex-direction: column;
+	align-items: center;
+	justify-content: center;
+	gap: 2px;
+}
+.bar .sidelabel {
+	font-size: 10.5px;
+	font-weight: 600;
+	line-height: 1;
+	white-space: nowrap;
+}
+.bar {
+	background: linear-gradient(180deg, transparent, var(--bg) 55%);
+}
+.playbadge {
+	position: absolute;
+	top: 50%;
+	left: 50%;
+	transform: translate(-50%, -50%);
+	width: 40px;
+	height: 40px;
+	border-radius: 50%;
+	background: rgba(0, 0, 0, 0.45);
+	color: #fff;
+	display: grid;
+	place-items: center;
+	font-size: 14px;
+	padding-left: 3px;
+	pointer-events: none;
+	z-index: 2;
+}
+.lb video {
+	flex: 1;
+	width: 100%;
+	min-height: 0;
+	object-fit: contain;
+	background: #000;
+}
+
+/* single sticky header: album name + menu on top, moments breadcrumb underneath */
+.topnav {
+	position: sticky;
+	top: 0;
+	z-index: 20;
+	display: flex;
+	flex-direction: column;
+	gap: 6px;
+	padding: 7px 8px 9px 16px;
+	background: color-mix(in srgb, var(--bg) 90%, transparent);
+	backdrop-filter: blur(10px);
+	border-bottom: 1px solid var(--line);
+}
+.topnav .toprow {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+}
+.topnav .albumtitle {
+	flex: 1;
+	min-width: 0;
+	margin: 0;
+	font-family: var(--font-brand);
+	font-size: 19px;
+	font-weight: 600;
+	letter-spacing: -0.01em;
+	white-space: nowrap;
+	overflow: hidden;
+	text-overflow: ellipsis;
+}
+.topnav .crumbs {
+	min-width: 0;
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	overflow-x: auto;
+	scrollbar-width: none;
+}
+.topnav .crumbs::-webkit-scrollbar {
+	display: none;
+}
+.topnav .iconbtn {
+	flex: none;
+	width: 34px;
+	height: 34px;
+	border-radius: 11px;
+	display: grid;
+	place-items: center;
+	font-size: 18px;
+	color: var(--ink);
+}
+.topnav .iconbtn:active {
+	background: var(--surface-2);
+}
+/* subtle divider between moment groups (names live in the breadcrumb, not here) */
+.moment {
+	padding: 16px 16px 8px;
+}
+.moment + .moment {
+	border-top: 1px solid var(--line);
+	margin-top: 4px;
+	padding-top: 18px;
+}
+.filterbar {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	padding: 8px 16px;
+	font-size: 13px;
+	color: var(--muted);
+	background: color-mix(in srgb, var(--accent) 8%, transparent);
+	border-bottom: 1px solid var(--line);
+}
+.filterbar b {
+	color: var(--ink);
+}
+.filterbar button {
+	color: var(--accent-text);
+	font-weight: 600;
+	font-size: 13px;
+}
+
+/* likes (Instagram-style hearts) */
+.tilelike {
+	position: absolute;
+	top: 5px;
+	right: 5px;
+	display: flex;
+	align-items: center;
+	gap: 3px;
+	padding: 3px 7px;
+	border-radius: 9px;
+	font-size: 12px;
+	font-weight: 600;
+	color: #fff;
+	background: rgba(0, 0, 0, 0.4);
+	backdrop-filter: blur(4px);
+}
+.tilelike .hicon {
+	font-size: 14px;
+	line-height: 1;
+}
+.like.on .hicon {
+	color: #e0566f;
+}
+
+/* feed (vertical flow) layout */
+.feed {
+	display: flex;
+	flex-direction: column;
+	gap: 16px;
+}
+.feedimg {
+	display: block;
+	width: 100%;
+	padding: 0;
+	border: none;
+	position: relative;
+	border-radius: 14px;
+	overflow: hidden;
+	background: var(--surface-2);
+	box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--ink) 9%, transparent);
+}
+.feedimg img {
+	width: 100%;
+	height: auto;
+	display: block;
+}
+.feedmeta {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	padding: 8px 4px 0;
+}
+.feedby {
+	font-size: 13px;
+	font-weight: 600;
+	color: var(--muted);
+}
+.feedmeta .like {
+	display: flex;
+	align-items: center;
+	gap: 5px;
+	font-size: 14px;
+	font-weight: 600;
+	color: var(--muted);
+	padding: 2px 4px;
+}
+.feedmeta .like .hicon {
+	font-size: 19px;
+	line-height: 1;
+}
+
+/* double-tap heart pop in the viewer */
+.heartpop {
+	position: absolute;
+	top: 50%;
+	left: 50%;
+	transform: translate(-50%, -50%);
+	font-size: 96px;
+	color: #e0566f;
+	z-index: 3;
+	pointer-events: none;
+	animation: pop 0.65s ease;
+}
+@keyframes pop {
+	0% {
+		opacity: 0;
+		transform: translate(-50%, -50%) scale(0.4);
+	}
+	30% {
+		opacity: 0.95;
+		transform: translate(-50%, -50%) scale(1.05);
+	}
+	100% {
+		opacity: 0;
+		transform: translate(-50%, -50%) scale(1.25);
+	}
+}
+.lb .acts .ico.on {
+	color: #e0566f;
+}
+
+/* multi-select */
+.selmark {
+	position: absolute;
+	top: 6px;
+	right: 6px;
+	width: 24px;
+	height: 24px;
+	border-radius: 50%;
+	border: 2px solid #fff;
+	background: rgba(0, 0, 0, 0.25);
+	display: grid;
+	place-items: center;
+	color: #fff;
+	font-size: 13px;
+	font-weight: 700;
+	z-index: 4;
+}
+.selmark.on {
+	background: var(--accent);
+	border-color: var(--accent);
+}
+.tile.sel,
+.feedcard.sel {
+	outline: 2px solid var(--accent);
+	outline-offset: 2px;
+	border-radius: 14px;
+}
+.selinfo {
+	flex: 1;
+	text-align: center;
+	font-weight: 700;
+	font-size: 15px;
+}
+.side.disabled {
+	opacity: 0.4;
+	pointer-events: none;
+}
+.side:disabled {
+	opacity: 0.4;
+}
+
+/* stop the native long-press image callout / selection on tiles */
+.tile,
+.tile img,
+.feedimg,
+.feedimg img {
+	-webkit-touch-callout: none;
+	-webkit-user-select: none;
+	user-select: none;
+}
+img {
+	-webkit-user-drag: none;
+}

@@ -1,0 +1,62 @@
+<!doctype html>
+<html lang="en">
+	<head>
+		<meta charset="utf-8" />
+		<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+		<meta name="theme-color" content="#f8f5ef" />
+		<link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+		<link rel="icon" type="image/png" sizes="128x128" href="/favicon.png" />
+		<title>%sveltekit.status% · Mira</title>
+		<!-- Static fallback: used when an endpoint (download, media) fails for a browser
+		     navigation, or when the app itself cannot render +error.svelte. No scripts,
+		     so it works under the strict CSP; colours mirror the default skin. -->
+		<style>
+			body {
+				margin: 0;
+				min-height: 100dvh;
+				display: grid;
+				place-items: center;
+				background: #f8f5ef;
+				color: #302833;
+				font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+				line-height: 1.45;
+			}
+			main {
+				max-width: 340px;
+				padding: 24px;
+				text-align: center;
+			}
+			img {
+				height: 36px;
+			}
+			h1 {
+				font-family: Georgia, 'Times New Roman', serif;
+				font-size: 22px;
+				font-weight: 600;
+				margin: 14px 0 6px;
+			}
+			p {
+				color: #716574;
+				font-size: 14px;
+				margin: 0 0 20px;
+			}
+			a {
+				display: inline-block;
+				padding: 13px 22px;
+				border-radius: 14px;
+				background: #deb878;
+				color: #38243d;
+				font-weight: 700;
+				text-decoration: none;
+			}
+		</style>
+	</head>
+	<body>
+		<main>
+			<img src="/mira-mark.svg" alt="" />
+			<h1>%sveltekit.error.message%</h1>
+			<p>Mira · %sveltekit.status%</p>
+			<a href="/">Back to Mira</a>
+		</main>
+	</body>
+</html>

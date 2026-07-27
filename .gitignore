@@ -1,0 +1,14 @@
+node_modules
+/build
+/.svelte-kit
+/data
+/media
+/internal/motion/gen
+.env
+.env.*
+!.env.example
+# Google OAuth id + secret for the local production-image preview. Already covered
+# by .env.* above; listed explicitly because it holds real secrets.
+.env.google
+*.log
+.DS_Store

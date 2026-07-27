@@ -1,0 +1,9 @@
+# Build output / deps
+.svelte-kit/
+build/
+node_modules/
+data/
+review/
+internal/
+.agents/
+.claude/

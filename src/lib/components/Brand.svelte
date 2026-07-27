@@ -1,0 +1,41 @@
+<script lang="ts">
+	let { size = 34 }: { size?: number } = $props();
+</script>
+
+<div class="brand">
+	<!-- The Shared Frame mark, inline so it follows the skin's ink (reversed on dark skins);
+	     the h1 beside it completes the lockup in Fraunces 600. -->
+	<svg class="logo" viewBox="100 108 312 252" style="height:{Math.round(size * 0.8)}px" aria-hidden="true">
+		<path
+			d="M104 356V202C104 145 138 112 182 112C215 112 241 130 256 155C271 130 297 112 330 112C374 112 408 145 408 202V356H348V203C348 180 340 170 326 170C312 170 286 188 286 212V356H226V212C226 188 200 170 186 170C172 170 164 180 164 203V356Z"
+		/>
+		<rect x="307" y="277" width="26" height="26" rx="7" />
+	</svg>
+	<h1>Mira</h1>
+</div>
+
+<style>
+	.brand {
+		display: flex;
+		align-items: center;
+		gap: 10px;
+		margin-bottom: 4px;
+	}
+	.logo {
+		width: auto;
+		flex-shrink: 0;
+	}
+	.logo path {
+		fill: var(--ink);
+	}
+	.logo rect {
+		fill: #f3b99c;
+	}
+	h1 {
+		font-family: var(--font-brand);
+		font-size: 25px;
+		font-weight: 600;
+		margin: 0;
+		letter-spacing: -0.01em;
+	}
+</style>
