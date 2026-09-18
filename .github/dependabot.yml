@@ -1,0 +1,39 @@
+version: 2
+updates:
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    groups:
+      # Major upgrades remain individual proposals for compatibility review.
+      npm-compatible:
+        patterns: ['*']
+        update-types: [minor, patch]
+    ignore:
+      # SvelteKit 3 and typescript-eslint support TypeScript up to 6.x.
+      - dependency-name: typescript
+        update-types: [version-update:semver-major]
+  - package-ecosystem: docker
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    groups:
+      docker-compatible:
+        patterns: ['*']
+        update-types: [minor, patch]
+    ignore:
+      # Stay on Node.js 24 LTS: a new major (even an LTS one) is a deliberate upgrade,
+      # tested with the dependencies and the production image, not a weekly update.
+      - dependency-name: node
+        update-types: [version-update:semver-major]
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    groups:
+      actions-compatible:
+        patterns: ['*']
+        update-types: [minor, patch]

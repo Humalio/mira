@@ -1,0 +1,52 @@
+# Local preview of the PRODUCTION image. Builds the multi-stage image and serves
+# it on localhost against a throwaway Postgres + ./data media volume. This runs
+# the real adapter-node server (unlike compose.dev.yaml, which runs vite dev).
+#
+#   docker compose up --build      # build + serve -> http://localhost:5180
+#   docker compose down            # stop, keep data
+#   docker compose down -v         # stop and wipe the preview DB
+services:
+  db:
+    image: postgres:18-alpine
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-mira}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-mira}
+      POSTGRES_DB: ${POSTGRES_DB:-mira}
+      PGDATA: /var/lib/postgresql/data/pgdata
+    volumes:
+      - mira_preview_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U ${POSTGRES_USER:-mira} -d ${POSTGRES_DB:-mira}']
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  mira:
+    image: mira:local
+    build: .
+    container_name: mira
+    restart: unless-stopped
+    # Owners need a way to sign in: set MIRA_ADMIN_PASSWORD, or put an OAuth provider
+    # pair in .env.google (or another supported provider) before starting the preview.
+    env_file:
+      - path: .env.google
+        required: false
+    environment:
+      ORIGIN: ${ORIGIN:-http://localhost:5180} # adapter-node CSRF origin; must match the browser URL
+      PUBLIC_ORIGIN: ${PUBLIC_ORIGIN:-http://localhost:5180}
+      AUTH_SECRET: ${AUTH_SECRET:?set a 32+ character AUTH_SECRET for production-image preview}
+      MIRA_ADMIN_IDENTITIES: ${MIRA_ADMIN_IDENTITIES:-} # no automatic admin on preview
+      MIRA_ADMIN_PASSWORD: ${MIRA_ADMIN_PASSWORD:-}
+      MIRA_ADMIN_NAME: ${MIRA_ADMIN_NAME:-}
+      DATABASE_URL: postgres://${POSTGRES_USER:-mira}:${POSTGRES_PASSWORD:-mira}@db:5432/${POSTGRES_DB:-mira}
+      BODY_SIZE_LIMIT: ${BODY_SIZE_LIMIT:-64M}
+    volumes:
+      - ./data:/data # uploaded media; the database lives in Postgres
+    ports:
+      - '127.0.0.1:5180:3000'
+    depends_on:
+      db:
+        condition: service_healthy
+
+volumes:
+  mira_preview_pgdata:

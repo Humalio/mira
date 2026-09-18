@@ -1,0 +1,25 @@
+# Keep the build context small + deterministic. node_modules and build are
+# regenerated inside the image; data/media/secrets must never enter it.
+.git
+node_modules
+/build
+/.svelte-kit
+/data
+/media
+.env
+.env.*
+!.env.example
+*.log
+.DS_Store
+.claude
+
+.agents
+.Codex
+.forgejo
+internal
+AGENTS.md
+deploy/compose.*.yaml
+!deploy/compose.prod.yaml
+
+# Review notes and screenshots are private working material.
+review

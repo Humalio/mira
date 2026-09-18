@@ -1,0 +1,90 @@
+name: GitHub Docker release
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'New stable version (for example 0.1.0); creates a draft for review'
+        required: true
+        type: string
+permissions:
+  contents: read
+concurrency:
+  group: github-release
+  cancel-in-progress: false
+jobs:
+  release:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    permissions:
+      contents: write
+      packages: write
+    env:
+      VERSION: ${{ inputs.version }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - name: Validate version and reserve a new release
+        run: |
+          set -eu
+          printf '%s' "$VERSION" | grep -Eq '^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$'
+          git check-ref-format "refs/tags/v$VERSION"
+          test "$(gh api "repos/$GITHUB_REPOSITORY/git/matching-refs/tags/v$VERSION" --jq 'length')" = 0
+          printf 'IMAGE=ghcr.io/%s\n' "${GITHUB_REPOSITORY,,}" >> "$GITHUB_ENV"
+      - name: Verify source and smoke-test the production image
+        run: sh scripts/verify-release.sh
+      - uses: docker/setup-buildx-action@v4
+      - uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+      - name: Publish the verified Intel/AMD image
+        id: image
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          platforms: linux/amd64
+          push: true
+          tags: |
+            ${{ env.IMAGE }}:${{ inputs.version }}
+            ${{ env.IMAGE }}:sha-${{ github.sha }}
+          labels: |
+            org.opencontainers.image.version=${{ inputs.version }}
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+      - name: Create draft release with installation files and notes
+        env:
+          DIGEST: ${{ steps.image.outputs.digest }}
+        run: |
+          set -eu
+          python3 - <<'PY'
+          import os, pathlib, re
+          changelog = pathlib.Path('CHANGELOG.md').read_text()
+          section = re.search(r'(?ms)^## \[Unreleased\]\s*\n(.*?)(?=^## |\Z)', changelog)
+          if not section or not section.group(1).strip():
+              raise SystemExit('Add user-facing notes to CHANGELOG.md under ## [Unreleased] before releasing')
+          notes = section.group(1).strip()
+          image, version, digest = (os.environ[k] for k in ('IMAGE', 'VERSION', 'DIGEST'))
+          notes += f'\n\n### Docker image\n\n`{image}:{version}`\n\nImmutable digest: `{image}@{digest}`\n\nDownload the Compose file and environment example below. See [deployment instructions](https://github.com/{os.environ["GITHUB_REPOSITORY"]}/blob/{os.environ["GITHUB_SHA"]}/docs/DEPLOYMENT.md).\n'
+          pathlib.Path('release-notes.md').write_text(notes)
+          compose = pathlib.Path('deploy/compose.prod.yaml').read_text().replace('../.env', '.env')
+          # The source Compose file (shown on the website too) names the release it runs by
+          # default; it must be this release, or a fresh install would run another one.
+          default = re.search(r'(?m)^\s*image:\s*\$\{[A-Z_]*IMAGE:-[^}:]*:([^}]*)\}\s*$', compose)
+          if not default or default.group(1) != version:
+              raise SystemExit(f'Set the default image in deploy/compose.prod.yaml and site/hosting.html to {version} first')
+          compose, pinned = re.subn(r'(?m)^(\s*image:\s*)\$\{[A-Z_]*IMAGE(?::-[^}]*)?\}\s*$', lambda match: f'{match[1]}{image}:{version}', compose)
+          if pinned != 1:
+              raise SystemExit('deploy/compose.prod.yaml: expected exactly one application image line to pin')
+          pathlib.Path('compose.yaml').write_text(compose)
+          example = pathlib.Path('.env.example').read_text()
+          example, pinned = re.subn(r'(?m)^#?\s*([A-Z_]*IMAGE)=.*$', lambda match: f'{match[1]}={image}:{version}', example)
+          if pinned != 1:
+              raise SystemExit('.env.example: expected exactly one image setting to pin')
+          pathlib.Path('environment.example').write_text(example)
+          pathlib.Path('release-CHANGELOG.md').write_text(changelog.replace('## [Unreleased]', f'## [{version}]', 1))
+          PY
+          gh release create "v$VERSION" --target "$GITHUB_SHA" --draft --title "Mira $VERSION" --notes-file release-notes.md compose.yaml environment.example release-CHANGELOG.md

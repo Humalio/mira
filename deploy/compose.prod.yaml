@@ -1,0 +1,64 @@
+# Mira, one server. Save this file as compose.yaml in an empty folder, put a .env file
+# beside it (see the hosting guide), then run:  docker compose up -d
+# From a clone of the repository instead:
+#   docker compose --env-file .env -f deploy/compose.prod.yaml up -d
+# Guide: https://github.com/Humalio/mira/blob/main/docs/DEPLOYMENT.md
+services:
+  db:
+    image: postgres:18-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-mira}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB:-mira}
+      PGDATA: /var/lib/postgresql/data/pgdata
+    volumes:
+      - mira_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U ${POSTGRES_USER:-mira} -d ${POSTGRES_DB:-mira}']
+      interval: 5s
+      timeout: 3s
+      retries: 10
+  mira:
+    # The release to run. Pin a version; there is no "latest" tag.
+    image: ${MIRA_IMAGE:-ghcr.io/humalio/mira:0.1.0}
+    restart: unless-stopped
+    stop_grace_period: 120s
+    environment:
+      # The exact address people type, scheme included, e.g. https://photos.example.org
+      ORIGIN: ${ORIGIN:?set ORIGIN}
+      PUBLIC_ORIGIN: ${PUBLIC_ORIGIN:-${ORIGIN}}
+      DATABASE_URL: postgres://${POSTGRES_USER:-mira}:${POSTGRES_PASSWORD:?}@db:5432/${POSTGRES_DB:-mira}
+      MEDIA_DIR: /data/media
+      BODY_SIZE_LIMIT: ${BODY_SIZE_LIMIT:-64M}
+      ADDRESS_HEADER: ${ADDRESS_HEADER:-X-Forwarded-For}
+      XFF_DEPTH: ${XFF_DEPTH:-1}
+      SHUTDOWN_TIMEOUT: ${SHUTDOWN_TIMEOUT:-30}
+      AUTH_SECRET: ${AUTH_SECRET:?set a 32+ character AUTH_SECRET}
+      # Who is in charge. Either a password of 12+ characters for the sign-in page...
+      MIRA_ADMIN_PASSWORD: ${MIRA_ADMIN_PASSWORD:-}
+      MIRA_ADMIN_NAME: ${MIRA_ADMIN_NAME:-}
+      # ...or exact accounts at a sign-in service below, such as github:123456.
+      MIRA_ADMIN_IDENTITIES: ${MIRA_ADMIN_IDENTITIES:-}
+      # Who runs this copy and how long photos are kept, shown to guests. Optional.
+      MIRA_OPERATOR_NAME: ${MIRA_OPERATOR_NAME:-}
+      MIRA_OPERATOR_CONTACT: ${MIRA_OPERATOR_CONTACT:-}
+      MIRA_RETENTION_NOTE: ${MIRA_RETENTION_NOTE:-}
+      # Optional sign-in services for album owners; each needs both values.
+      AUTH_GOOGLE_ID: ${AUTH_GOOGLE_ID:-}
+      AUTH_GOOGLE_SECRET: ${AUTH_GOOGLE_SECRET:-}
+      AUTH_FACEBOOK_ID: ${AUTH_FACEBOOK_ID:-}
+      AUTH_FACEBOOK_SECRET: ${AUTH_FACEBOOK_SECRET:-}
+      AUTH_GITHUB_ID: ${AUTH_GITHUB_ID:-}
+      AUTH_GITHUB_SECRET: ${AUTH_GITHUB_SECRET:-}
+    volumes:
+      - mira_media:/data
+    ports:
+      # Reachable from this machine only; your HTTPS proxy forwards to it.
+      - '127.0.0.1:${MIRA_PORT:-5180}:3000'
+    depends_on:
+      db:
+        condition: service_healthy
+volumes:
+  mira_pgdata:
+  mira_media:
