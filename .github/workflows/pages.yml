@@ -17,9 +17,10 @@ concurrency:
 
 jobs:
   deploy:
-    if: github.server_url == 'https://github.com'
+    if: github.event.repository.private == false
     runs-on: ubuntu-latest
     permissions:
+      contents: read
       pages: write
       id-token: write
     environment:
