@@ -22,7 +22,10 @@ export type SkinTokens = {
 	accent: string;
 	/** The accent adjusted until it is readable as text on this skin; see `readableAccent`. */
 	accentText: string;
+	/** Text on an accent fill: the skin's own, unless the album's accent needs another; see `readableInk`. */
 	accentInk: string;
+	/** Error and destructive text, readable on every surface of this skin. */
+	dangerText: string;
 	radius: string;
 	font: string;
 	shadow: string;
@@ -33,13 +36,15 @@ export type SkinTokens = {
 export type Skin = {
 	id: string;
 	name: string;
-	/** `accentText` is derived per album (the owner can pick any accent), never stored. */
-	tokens: Omit<SkinTokens, 'accentText'>;
+	/** `accentText` is derived per album (the owner can pick any accent) and `dangerText` per skin; neither is stored. */
+	tokens: Omit<SkinTokens, 'accentText' | 'dangerText'>;
 };
 
 const FONT = "'Plus Jakarta Sans Variable', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif";
 const DARK_SHADOW = '0 10px 30px rgba(0, 0, 0, 0.40)';
 
+// Every `muted` must reach WCAG AA (4.5:1) on its skin's bg, surface and surface2, and every
+// `accentInk` on its skin's own accent; skins.test.ts checks both.
 export const SKINS: Record<string, Skin> = {
 	// The Shared Frame brand: paper canvas, golden-apricot actions with plum text, a hint of
 	// apricot on empty covers. Keeps the id 'daylight' so every album on the default look
@@ -71,7 +76,7 @@ export const SKINS: Record<string, Skin> = {
 			surface2: '#efe6d4',
 			line: '#e7ddc8',
 			ink: '#2c2620',
-			muted: '#9a8d76',
+			muted: '#706756',
 			accent: '#deb878',
 			accentInk: '#2c2418',
 			radius: '16px',
@@ -89,8 +94,9 @@ export const SKINS: Record<string, Skin> = {
 			surface2: '#efe7da',
 			line: '#e7ddcc',
 			ink: '#2a241d',
-			muted: '#978b78',
-			accent: '#bd7a52',
+			muted: '#706759',
+			// Dark enough for white text to reach 4.5:1 (the earlier #bd7a52 gave 3.5:1).
+			accent: '#a6653d',
 			accentInk: '#ffffff',
 			radius: '16px',
 			font: FONT,
@@ -107,8 +113,9 @@ export const SKINS: Record<string, Skin> = {
 			surface2: '#e8edf2',
 			line: '#dde4ec',
 			ink: '#1b2128',
-			muted: '#7c8794',
-			accent: '#5f88ad',
+			muted: '#616a75',
+			// Dark enough for white text to reach 4.5:1 (the earlier #5f88ad gave 3.7:1).
+			accent: '#50789d',
 			accentInk: '#ffffff',
 			radius: '16px',
 			font: FONT,
@@ -125,8 +132,9 @@ export const SKINS: Record<string, Skin> = {
 			surface2: '#e8ece6',
 			line: '#dde3d9',
 			ink: '#1e231d',
-			muted: '#82897e',
-			accent: '#5e9079',
+			muted: '#656b62',
+			// Dark enough for white text to reach 4.5:1 (the earlier #5e9079 gave 3.7:1).
+			accent: '#4e7f69',
 			accentInk: '#ffffff',
 			radius: '16px',
 			font: FONT,
@@ -143,7 +151,7 @@ export const SKINS: Record<string, Skin> = {
 			surface2: '#ece4c6',
 			line: '#e3dcc0',
 			ink: '#2a2620',
-			muted: '#6b7d69',
+			muted: '#5b6a59',
 			accent: '#7f0000',
 			accentInk: '#f6f7ec',
 			radius: '16px',
@@ -268,6 +276,31 @@ export function blend(a: string, b: string, amount: number): string {
 	);
 }
 
+/**
+ * The text colour for a button filled with `accent`. The skin's own `ink` stays whenever it
+ * reads (WCAG AA), so a skin looks as designed. An owner's accent can be anything, though,
+ * and white on a pale accent or plum on a dark one is unreadable: then take whichever of
+ * the `alternatives` (the skin's text and card colours, one dark and one light) reads best,
+ * and on a mid-tone accent where even that falls short, push it towards black or white.
+ */
+export function readableInk(accent: string, ink: string, alternatives: string[]): string {
+	if (!channels(accent) || contrastRatio(ink, accent) >= TEXT_CONTRAST) return ink;
+	const best = alternatives.reduce((a, b) => (contrastRatio(b, accent) > contrastRatio(a, accent) ? b : a), ink);
+	// Whichever of black and white reads better: one of them always clears AA.
+	const pole = contrastRatio('#000000', accent) >= contrastRatio('#ffffff', accent) ? '#000000' : '#ffffff';
+	return readableAccent(best, pole, [accent]);
+}
+
+/**
+ * Error and destructive text. The light value is the red the app already uses for
+ * destructive actions; the dark one is the brand's dark danger role. Both clear AA on every
+ * built-in skin, and `readableAccent` adjusts them for any skin added later.
+ */
+const DANGER = { light: '#b3261e', dark: '#f5a3b4' } as const;
+
+/** A dark skin: its page is closer to black than to white. */
+const isDark = (bg: string) => contrastRatio(bg, '#000000') < contrastRatio(bg, '#ffffff');
+
 /** Share of accent in the filter bar's tint; keep in step with `.filterbar` in app.css. */
 export const BAR_TINT = 0.08;
 
@@ -292,6 +325,13 @@ export function resolveTokens(
 			base.surface,
 			base.surface2,
 			blend(base.bg, chosen, BAR_TINT)
+		]),
+		// Share, primary buttons and the active chip are filled with the chosen accent.
+		accentInk: readableInk(chosen, base.accentInk, [base.ink, base.surface]),
+		dangerText: readableAccent(isDark(base.bg) ? DANGER.dark : DANGER.light, base.ink, [
+			base.bg,
+			base.surface,
+			base.surface2
 		])
 	};
 }
@@ -306,6 +346,7 @@ const CSS_VAR: Record<keyof SkinTokens, string> = {
 	accent: '--accent',
 	accentText: '--accent-text',
 	accentInk: '--accent-ink',
+	dangerText: '--danger-text',
 	radius: '--radius',
 	font: '--font',
 	shadow: '--shadow',

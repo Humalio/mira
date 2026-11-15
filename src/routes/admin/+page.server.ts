@@ -14,7 +14,8 @@ import {
 	setAlbumDisabled,
 	setUserQuota
 } from '#lib/server/admin.js';
-import { getSettings, getUserById } from '#lib/server/users.js';
+import { getSettings, getUserById, isConfiguredAdmin } from '#lib/server/users.js';
+import { isLocalAdmin } from '#lib/server/local-admin.js';
 import { translator } from '#lib/i18n/index.js';
 import { error, fail, isHttpError } from '@sveltejs/kit';
 import { eq } from 'drizzle-orm';
@@ -163,6 +164,17 @@ export const actions: Actions = {
 		const desired = fd.get('isAdmin');
 		if (desired !== '0' && desired !== '1') return fail(400, { error: 'Invalid administrator state' });
 		if (id === me.id) return fail(400, { error: translator(locals.locale)('srv.cantChangeOwnAdmin') });
+		if (desired === '0') {
+			// Rights that come from the server's settings are given back at the account's
+			// next sign-in (see authorizeSignIn), so revoking them here would not last.
+			// Say where they are set instead of showing a change that quietly comes undone.
+			const target = await getUserById(id);
+			if (target && isConfiguredAdmin(target.provider, target.providerAccountId)) {
+				const t = translator(locals.locale);
+				const fromPassword = isLocalAdmin(target.provider, target.providerAccountId);
+				return fail(409, { error: t(fromPassword ? 'srv.adminFromPassword' : 'srv.adminFromIdentities') });
+			}
+		}
 		await db.transaction(async (tx) => {
 			await assertAdminMutationAllowed(tx, me.id, id, desired === '0');
 			await tx

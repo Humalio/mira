@@ -6,10 +6,11 @@ import { isAlbumOwner, resolveAlbumMember } from '#lib/server/guard.js';
 import { LIMITS, jsonObject, requireContentLength, requiredUuid } from '#lib/server/input.js';
 import { rateLimit } from '#lib/server/rate-limit.js';
 import { translator } from '#lib/i18n/index.js';
-import { newId } from '#lib/server/ids.js';
-import { albums, moments, uploadSessions, users } from '#lib/server/schema.js';
+import { memberScopedId, newId } from '#lib/server/ids.js';
+import { lockOwner } from '#lib/server/locks.js';
+import { albums, moments, uploadSessions, users, type UploadSession } from '#lib/server/schema.js';
 import { cleanupUpload, createUpload, hasVideoSpace, saveUploadName } from '#lib/server/storage.js';
-import { UPLOAD_TTL_MS, reservedUploadBytes, uploadUnderWay } from '#lib/server/uploads.js';
+import { UPLOAD_TTL_MS, getUploadSession, reservedUploadBytes, uploadUnderWay } from '#lib/server/uploads.js';
 import { isSupportedVideoMime } from '#lib/server/video.js';
 import { heardFromUpload } from '#lib/server/pulse.js';
 import { error } from '@sveltejs/kit';
@@ -31,7 +32,9 @@ export const POST: RequestHandler = async ({ params, request, locals }) => {
 	const [settings, owner] = await Promise.all([getSettings(), getUserById(album.ownerUserId)]);
 	const quotaMb = effectiveQuotaMb(owner?.quotaMb ?? null, settings);
 	const quotaBytes = quotaMb > 0 ? quotaMb * 1024 * 1024 : null;
-	if (settings.uploadsPaused) throw error(503, t('srv.uploadsPaused'));
+	// 423, not 503: the page retries a 503 (a busy server) for minutes, while a pause is
+	// the operator's decision and is shown to the person at once.
+	if (settings.uploadsPaused) throw error(423, t('srv.uploadsPaused'));
 	// A closed album takes nothing new. An upload already under way may finish.
 	if ((await getAlbumOptions(album.slug)).locked) throw error(403, t('srv.albumClosed'));
 
@@ -42,7 +45,37 @@ export const POST: RequestHandler = async ({ params, request, locals }) => {
 		.trim();
 	const totalBytes = Number(body?.totalBytes ?? 0);
 	if (!Number.isSafeInteger(totalBytes) || totalBytes <= 0) throw error(400, t('srv.badFileSize'));
-	if (!isSupportedVideoMime(mime)) throw error(415, 'Unsupported video type');
+	if (!isSupportedVideoMime(mime)) throw error(415, t('srv.unsupportedVideo'));
+	// Optional retry key, as for photos: an init whose answer was lost and is sent again
+	// gets the upload it already started, instead of a second empty one that holds the
+	// quota and one of the three upload places until it goes quiet. The id is derived from
+	// the key AND this member (see memberScopedId), with its own prefix so that it can
+	// never equal the id of a photo sent with the same key: the upload's id becomes the
+	// video's, and names its folder.
+	const clientId = body.clientId == null ? null : requiredUuid(body.clientId, 'Client id');
+	const resend = (prior: UploadSession) => {
+		const same =
+			prior.albumId === album.id &&
+			prior.memberId === member.id &&
+			prior.deviceToken === locals.deviceToken &&
+			prior.state === 'receiving' &&
+			prior.expiresAt > new Date() &&
+			prior.declaredBytes === totalBytes &&
+			prior.mime === mime;
+		if (!same) throw error(409, 'Client id already used');
+		heardFromUpload(prior.id);
+		return Response.json({
+			uploadId: prior.id,
+			chunkSize: prior.chunkSize,
+			totalChunks: prior.totalChunks,
+			duplicate: true
+		});
+	};
+	const uploadId = clientId ? memberScopedId(member.id, `video:${clientId}`) : newId();
+	if (clientId) {
+		const prior = await getUploadSession(uploadId);
+		if (prior) return resend(prior);
+	}
 
 	const MAX_VIDEO_BYTES = settings.maxVideoMb * 1024 * 1024;
 	if (totalBytes > Math.min(MAX_VIDEO_BYTES, LIMITS.videoBytes))
@@ -60,22 +93,28 @@ export const POST: RequestHandler = async ({ params, request, locals }) => {
 	// the only thing left to say is that it failed. Refuse now, with the real reason.
 	if (!(await hasVideoSpace(totalBytes))) throw error(507, t('srv.serverFull'));
 
-	const uploadId = newId();
 	const totalChunks = Math.ceil(totalBytes / CHUNK_SIZE);
 	const approved = album.autoApprove || (await isAlbumOwner(album, locals));
 	await createUpload(uploadId);
 	await saveUploadName(uploadId, body.name);
+	let prior: UploadSession | undefined;
 	try {
-		await db.transaction(async (tx) => {
+		prior = await db.transaction(async (tx) => {
 			// Serialize all reservations for the owner. Completion, image admission,
 			// album creation and deletion use the same key.
-			await tx.execute(sql`select pg_advisory_xact_lock(hashtext(${album.ownerUserId}))`);
+			await lockOwner(tx, album.ownerUserId);
+			if (clientId) {
+				// The same init sent twice at once: the first one to get here made it.
+				const [made] = await tx.select().from(uploadSessions).where(eq(uploadSessions.id, uploadId));
+				if (made) return made;
+			}
 			const [{ active }] = await tx
 				.select({ active: sql<number>`count(*)::int` })
 				.from(uploadSessions)
 				// Uploads this person abandoned (see uploadUnderWay) do not count against them.
 				.where(and(eq(uploadSessions.memberId, member.id), uploadUnderWay()));
-			if (active >= 3) throw error(429, 'Finish or cancel an existing upload first');
+			// 409, not 429: waiting does not help, finishing or cancelling one does.
+			if (active >= 3) throw error(409, t('srv.finishUploadFirst'));
 			if (quotaBytes != null) {
 				const [stored] = await tx.select({ bytes: users.usedBytes }).from(users).where(eq(users.id, album.ownerUserId));
 				const [reserved] = await tx
@@ -103,11 +142,13 @@ export const POST: RequestHandler = async ({ params, request, locals }) => {
 				quality: album.videoQuality,
 				approved
 			});
+			return undefined;
 		});
 	} catch (cause) {
 		await cleanupUpload(uploadId).catch(() => {});
 		throw cause;
 	}
+	if (prior) return resend(prior);
 	heardFromUpload(uploadId); // the album shows "being prepared" from the first moment
 	return Response.json({ uploadId, chunkSize: CHUNK_SIZE, totalChunks });
 };

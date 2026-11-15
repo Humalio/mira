@@ -2,9 +2,10 @@ import { db } from '#lib/server/db.js';
 import { isAlbumOwner, resolveAlbumMember } from '#lib/server/guard.js';
 import { translator } from '#lib/i18n/index.js';
 import { photos } from '#lib/server/schema.js';
+import { lockMediaItem, lockOwner } from '#lib/server/locks.js';
 import { enqueueMediaDeletion } from '#lib/server/media-deletions.js';
 import { error } from '@sveltejs/kit';
-import { and, eq, sql } from 'drizzle-orm';
+import { and, eq } from 'drizzle-orm';
 import type { RequestHandler } from './$types';
 import { jsonObject, LIMITS, requireContentLength, requiredUuid } from '#lib/server/input.js';
 import { rateLimit } from '#lib/server/rate-limit.js';
@@ -31,8 +32,8 @@ export const POST: RequestHandler = async ({ params, request, locals }) => {
 	}
 
 	await db.transaction(async (tx) => {
-		await tx.execute(sql`select pg_advisory_xact_lock(hashtext(${album.ownerUserId}))`);
-		await tx.execute(sql`select pg_advisory_xact_lock(hashtext(${`media:${mediaItem.id}`}))`);
+		await lockOwner(tx, album.ownerUserId);
+		await lockMediaItem(tx, mediaItem.id);
 		await tx.delete(photos).where(eq(photos.id, mediaItem.id));
 		await enqueueMediaDeletion(tx, album.ownerUserId, `${album.slug}/${mediaItem.id}`);
 	});

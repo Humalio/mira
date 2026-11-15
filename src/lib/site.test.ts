@@ -32,3 +32,23 @@ describe('the hosting page', () => {
 		expect(/image: \$\{MIRA_IMAGE:-ghcr\.io\/humalio\/mira:([^}]+)\}/.exec(compose)?.[1]).toBe(version);
 	});
 });
+
+// The release attaches .env.example as its environment example, and a value set there wins
+// over the Compose file's fallback to ORIGIN: invitations would point at that address.
+describe('the environment example', () => {
+	it('leaves PUBLIC_ORIGIN unset, so invitations follow ORIGIN', () => {
+		expect(read('.env.example')).not.toMatch(/^\s*PUBLIC_ORIGIN\s*=/m);
+	});
+});
+
+describe('the website without JavaScript', () => {
+	it('shows both home page panels', () => {
+		expect(read('site/index.html')).not.toMatch(/role="tabpanel"[^>]*\shidden/);
+	});
+
+	it('offers no copy button that cannot work', () => {
+		const buttons = read('site/hosting.html').match(/<button[^>]*class="copy"[^>]*>/g) ?? [];
+		expect(buttons.length).toBeGreaterThan(0);
+		for (const button of buttons) expect(button).toMatch(/\shidden[\s>]/);
+	});
+});

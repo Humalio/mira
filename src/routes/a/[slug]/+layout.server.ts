@@ -1,4 +1,4 @@
-import { ensureMembership, getAlbum, getMembershipByUser, isAlbumOwner, memberFor } from '#lib/server/guard.js';
+import { ensureMembership, getAlbum, isAlbumOwner, memberFor } from '#lib/server/guard.js';
 import { translator } from '#lib/i18n/index.js';
 import { resolveTokens, tokensToStyle } from '#lib/theme/skins.js';
 import { error, redirect } from '@sveltejs/kit';
@@ -22,19 +22,15 @@ export const load: LayoutServerLoad = async ({ params, locals, request, getClien
 	if (member && session?.user && !member.userId) {
 		member = await ensureMembership(album.id, locals.deviceToken, member.displayName, session.user.id);
 	}
-	if (!member && session?.user) {
-		// A signed-in user already a member on another device is recognised here (no
-		// duplicate); an owner opening their own album on a fresh device auto-joins.
-		member =
-			(await getMembershipByUser(album.id, session.user.id)) ??
-			(album.ownerUserId === session.user.id
-				? await ensureMembership(
-						album.id,
-						locals.deviceToken,
-						session.user.name || session.user.email || 'Me',
-						session.user.id
-					)
-				: undefined);
+	if (!member && session?.user && album.ownerUserId === session.user.id) {
+		// memberFor has already found a signed-in user who is a member on another device
+		// (no duplicate); an owner opening their own album on a fresh device auto-joins.
+		member = await ensureMembership(
+			album.id,
+			locals.deviceToken,
+			session.user.name || session.user.email || 'Me',
+			session.user.id
+		);
 	}
 	if (!member) throw redirect(303, `/j/${params.slug}`);
 

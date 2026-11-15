@@ -27,6 +27,14 @@ const canonicalOrigin = (() => {
  * needed to join an album. Production database initialization run before the server starts.
  */
 const miraHandle: Handle = async ({ event, resolve }) => {
+	// What this enforces, and what it does not. Started the image's way (scripts/start.mjs),
+	// every request URL is built from ORIGIN, whatever Host or X-Forwarded-Host the client
+	// sent, so this never fires: it only stops a production build started some other way,
+	// where adapter-node would take the address from the Host header. The Host headers
+	// themselves are not compared: the image's health check and proxies that rewrite Host
+	// (nginx does by default) arrive under other names, and nothing sent back is built
+	// from them. Sign-in and callback addresses and SvelteKit's form-post check use the
+	// request URL; Auth.js reads Host only to address its own session look-up.
 	if (canonicalOrigin && event.url.origin !== canonicalOrigin) {
 		return new Response('Invalid request origin', { status: 400 });
 	}

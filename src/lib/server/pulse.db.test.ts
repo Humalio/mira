@@ -1,7 +1,9 @@
 import { eq } from 'drizzle-orm';
 import sharp from 'sharp';
 import { afterAll, describe, expect, it } from 'vitest';
+import { saveAlbumOptions } from './album-options';
 import { db } from './db';
+import { resetInvitation } from './invite';
 import { albumStamp, heardFromUpload, preparingVideos } from './pulse';
 import { albums, members, moments, photos, uploadSessions, users } from './schema';
 import { deleteMediaTree } from './storage';
@@ -168,6 +170,30 @@ describe('the album tells its open pages what is new and what is coming', () => 
 			.insert(members)
 			.values({ id: crypto.randomUUID(), albumId: a.row.id, deviceToken: crypto.randomUUID(), displayName: 'Iker' });
 		expect((await stamps()).zoe).not.toBe(renamed.zoe);
+	});
+
+	it('changes the stamp when the album is closed or reopened, or its invitation replaced', async () => {
+		// Open pages show these: the "closed" banner, the invitation link and its QR code,
+		// and the note that videos keep only a small copy.
+		const a = await album();
+		const stamp = () => albumStamp(a.row, a.zoe.viewer);
+		const before = await stamp();
+
+		await saveAlbumOptions(a.slug, { locked: true });
+		const closed = await stamp();
+		expect(closed).not.toBe(before);
+		await saveAlbumOptions(a.slug, { locked: false });
+		expect(await stamp()).toBe(before); // reopened: just as it was
+
+		await resetInvitation(a.slug);
+		const reset = await stamp();
+		expect(reset).not.toBe(before);
+		await resetInvitation(a.slug);
+		expect(await stamp()).not.toBe(reset); // every new link counts, not only the first
+
+		const beforeCopy = await stamp();
+		await saveAlbumOptions(a.slug, { keepOnlyCopy: true });
+		expect(await stamp()).not.toBe(beforeCopy);
 	});
 
 	it('answers a member in one small reply and refuses anyone else', async () => {

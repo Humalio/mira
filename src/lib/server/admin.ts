@@ -9,8 +9,9 @@
 import { and, asc, desc, eq, ilike, inArray, ne, or, sql } from 'drizzle-orm';
 import { db } from './db';
 import { albums, appSettings, members, photos, uploadSessions, users } from './schema';
+import { lockOwner } from './locks';
 import { enqueueMediaDeletion } from './media-deletions';
-import { getSettings, getUserById, type Settings } from './users';
+import { getSettings, getUserById, reachableAdministrator, type Settings } from './users';
 import { newId } from './ids';
 import { reservedUploadBytes } from './uploads';
 import { error } from '@sveltejs/kit';
@@ -26,7 +27,7 @@ export async function reconcileStorageCounters(): Promise<number> {
 	const owners = await db.select({ id: users.id }).from(users);
 	for (const owner of owners) {
 		fixed += await db.transaction(async (tx) => {
-			await tx.execute(sql`select pg_advisory_xact_lock(hashtext(${owner.id}))`);
+			await lockOwner(tx, owner.id);
 			// Acquire the counter row before taking the SUM's statement snapshot.
 			// Photo triggers also lock this row; a single UPDATE ... SUM statement
 			// can otherwise overwrite an increment committed while it waits.
@@ -162,11 +163,15 @@ export async function listAlbumsForAdmin(q: string, page: number) {
 	return { rows: rows.map((r) => ({ ...r, items: cmap.get(r.id) ?? 0 })), matched };
 }
 
-/** Upsert a subset of the singleton settings row. */
+/**
+ * Upsert a subset of the singleton settings row. Should the row not exist yet, it is
+ * created with registration closed, like `getSettings` creates it: the schema's own
+ * default is "open", and saving the upload limits first must not open the door.
+ */
 async function writeSettings(set: Partial<typeof appSettings.$inferInsert>): Promise<void> {
 	await db
 		.insert(appSettings)
-		.values({ id: 1, ...set })
+		.values({ id: 1, registrationMode: 'closed', ...set })
 		.onConflictDoUpdate({ target: appSettings.id, set });
 }
 
@@ -204,7 +209,7 @@ export async function setAlbumDisabled(albumId: string, disabled: boolean): Prom
  */
 export async function deleteAlbum(albumId: string, slug: string, ownerUserId: string): Promise<void> {
 	await db.transaction(async (tx) => {
-		await tx.execute(sql`select pg_advisory_xact_lock(hashtext(${ownerUserId}))`);
+		await lockOwner(tx, ownerUserId);
 		const pending = await tx
 			.select({ id: uploadSessions.id })
 			.from(uploadSessions)
@@ -238,11 +243,16 @@ export async function assertAdminMutationAllowed(
 		.where(eq(users.id, targetId));
 	if (!target) throw error(404, 'No such account');
 	if (deactivateTarget && target.isAdmin && !target.isBlocked) {
-		const [{ active }] = await tx
-			.select({ active: sql<number>`count(*)::int` })
+		// Count the administrators who would be left, leaving out a password account
+		// nobody can sign in to any more (see reachableAdministrator): it cannot open
+		// /admin, so it must not stand in for the last real administrator.
+		const [{ others }] = await tx
+			.select({ others: sql<number>`count(*)::int` })
 			.from(users)
-			.where(and(eq(users.isAdmin, true), eq(users.isBlocked, false)));
-		if (active <= 1) throw error(409, 'Cannot remove the last active administrator');
+			.where(
+				and(eq(users.isAdmin, true), eq(users.isBlocked, false), ne(users.id, targetId), reachableAdministrator())
+			);
+		if (others === 0) throw error(409, 'Cannot remove the last active administrator');
 	}
 }
 
@@ -250,7 +260,7 @@ export async function assertAdminMutationAllowed(
 export async function deleteAccount(accountId: string, actorId: string): Promise<void> {
 	await db.transaction(async (tx) => {
 		await assertAdminMutationAllowed(tx, actorId, accountId, true);
-		await tx.execute(sql`select pg_advisory_xact_lock(hashtext(${accountId}))`);
+		await lockOwner(tx, accountId);
 		// Hold the account row against a concurrent join's FK check while retiring
 		// its memberships; any new join after commit fails rather than becoming a guest.
 		await tx.execute(sql`select id from users where id = ${accountId} for update`);
@@ -317,7 +327,7 @@ export async function admitWithinQuota(
 	return db.transaction(async (tx) => {
 		// Always lock, even for an explicitly unlimited owner: deletion uses the same
 		// key and must not race a file write/row insert into an album being removed.
-		await tx.execute(sql`select pg_advisory_xact_lock(hashtext(${album.ownerUserId}))`);
+		await lockOwner(tx, album.ownerUserId);
 		if (quotaBytes != null) {
 			// Serialize same-owner uploads; the lock releases when this tx commits, so
 			// the counter below already includes every prior upload's committed row.

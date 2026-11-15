@@ -1,10 +1,11 @@
 import { db } from '#lib/server/db.js';
 import { isAlbumOwner, resolveAlbumMember } from '#lib/server/guard.js';
 import { translator } from '#lib/i18n/index.js';
+import { lockMediaItem } from '#lib/server/locks.js';
 import { photos } from '#lib/server/schema.js';
 import { renderPoster, writePoster } from '#lib/server/storage.js';
 import { error } from '@sveltejs/kit';
-import { and, eq, sql } from 'drizzle-orm';
+import { and, eq } from 'drizzle-orm';
 import type { RequestHandler } from './$types';
 import { LIMITS, requireContentLength, requiredUuid } from '#lib/server/input.js';
 import { rateLimit } from '#lib/server/rate-limit.js';
@@ -52,7 +53,7 @@ export const POST: RequestHandler = async ({ params, request, locals }) => {
 	// Only the per-item lock (serializes with delete's stage/restore) is needed, and
 	// only around a millisecond-scale file swap + one UPDATE.
 	await db.transaction(async (tx) => {
-		await tx.execute(sql`select pg_advisory_xact_lock(hashtext(${`media:${ph.id}`}))`);
+		await lockMediaItem(tx, ph.id);
 		const [current] = await tx.select({ id: photos.id }).from(photos).where(eq(photos.id, ph.id)).for('update');
 		if (!current) throw error(404);
 		const thumbKey = await writePoster(album.slug, mediaItemId, rendered.thumb);

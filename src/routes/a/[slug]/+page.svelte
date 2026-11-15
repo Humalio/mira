@@ -1,8 +1,11 @@
 <script lang="ts">
-	import { onMount, untrack } from 'svelte';
+	import { onMount, tick, untrack } from 'svelte';
 	import { SvelteSet } from 'svelte/reactivity';
 	import { enhance } from '$app/forms';
-	import { refreshAll } from '$app/navigation';
+	import { goto, refreshAll } from '$app/navigation';
+	import { resolve } from '$app/paths';
+	import { navigating } from '$app/state';
+	import type { ActionResult, SubmitFunction } from '$app/forms';
 	import { resolveTokens, tokensToStyle, SKIN_LIST, normalizeTheme } from '#lib/theme/skins.js';
 	import { allocate, type UiAction } from '#lib/ui/budget.js';
 	import {
@@ -112,6 +115,10 @@
 	// One 12 MB piece should never take this long even on a slow phone uplink (it allows
 	// about 0.4 Mbit/s); past it the connection is treated as dead and the piece resent.
 	const CHUNK_TIMEOUT_MS = 4 * 60_000;
+	// A photo goes up in one request, so its limit grows with its size at that same
+	// slowest speed, and is never shorter than a piece's.
+	const photoTimeout = (bytes: number) =>
+		Math.max(CHUNK_TIMEOUT_MS, Math.ceil((bytes / (12 * 1024 * 1024)) * CHUNK_TIMEOUT_MS));
 	// The progress poll is a few bytes each way.
 	const POLL_TIMEOUT_MS = 60_000;
 	// A bar only means something while we can measure: bytes sent, or ffmpeg's progress.
@@ -161,6 +168,9 @@
 		menuOpen = false;
 		returnInfo = null;
 		returnOpen = true;
+	}
+	function showReturnLink(out: Record<string, unknown> | undefined) {
+		returnInfo = (out?.returnLink ?? null) as typeof returnInfo;
 	}
 	async function copyText(text: string) {
 		try {
@@ -268,11 +278,78 @@
 		toastTimer = setTimeout(() => (toastMsg = ''), Math.max(2200, msg.length * 70));
 	}
 
+	/**
+	 * Run the page's load again on the page of the album the reader is on. Without
+	 * `?page` in the address the album opens on its newest page, and that was worked out
+	 * afresh on every reload: when the album reached item 201, every open phone jumped to
+	 * a page holding one photo and any open viewer closed. So the first reload writes the
+	 * page being read into the address (quietly: no scroll, no focus change) and later
+	 * ones keep to it. Someone opening the album still starts on its newest page.
+	 */
+	async function reload() {
+		if (new URL(location.href).searchParams.has('page')) return refreshAll();
+		// Already on the way somewhere (a tap on "Next"): that brings fresh data itself, and
+		// a navigation from here would turn the reader back.
+		if (navigating.to) return;
+		// The moment the reader picked (#m2) stays in the address as well.
+		const pinned = resolve(`/a/[slug]?page=${data.mediaPage}${location.hash}`, { slug: data.slug });
+		await goto(pinned, { replace: true, reset: false, refreshAll: true });
+	}
+
 	/** Reload the album's data without losing the viewer's place. */
 	async function refreshAlbum() {
 		const open = lightboxPhoto?.id;
-		await refreshAll();
+		await reload();
 		if (open) lightboxIndex = flat.findIndex((item) => item.id === open);
+	}
+
+	// What went wrong with the last form sent from a sheet, said in that sheet. A refusal
+	// (a moment added to an album closed meanwhile, a name of only spaces) used to leave
+	// the sheet open with nothing said, and a failure replaced the album with an error page.
+	let formProblem = $state<{ form: string; message: string } | null>(null);
+	$effect(() => {
+		// A message belongs to the sheet it was said in: opening or closing one clears it.
+		void [menuOpen, inviteOpen, returnOpen, momentOpen, renameOpen, editOpen];
+		formProblem = null;
+	});
+	function actionProblem(result: ActionResult): string {
+		if (result.type === 'failure' && typeof result.data?.error === 'string') return result.data.error;
+		// The server words its own refusals in the reader's language (only the owner may do
+		// that, the album's settings cannot be read). A rate limit, a crash or a lost
+		// connection says nothing useful to a person, so they get ours.
+		const message = result.type === 'error' ? result.error?.message : '';
+		if (message && [400, 403, 503].includes(result.status ?? 0) && !/^Error: \d+$/.test(message)) return message;
+		return t('board.formFailed');
+	}
+	/**
+	 * `use:enhance` for the forms in the sheets. Success reloads the album (on the page
+	 * the reader is on, see `reload`) and then runs `done`; anything else stays in the
+	 * sheet and says why there.
+	 */
+	function sheetForm(
+		form: string,
+		done: (data: Record<string, unknown> | undefined) => void,
+		{ confirmFirst, refresh = true }: { confirmFirst?: string; refresh?: boolean } = {}
+	): SubmitFunction {
+		return ({ cancel }) => {
+			if (confirmFirst && !confirm(confirmFirst)) {
+				cancel();
+				return;
+			}
+			formProblem = null;
+			return async ({ result, update }) => {
+				if (result.type === 'redirect') return update();
+				if (result.type === 'success') {
+					if (refresh) await reload().catch(() => {});
+					done(result.data);
+					return;
+				}
+				formProblem = { form, message: actionProblem(result) };
+				// A refusal can come from a change this page has not caught up with yet (the
+				// album was closed meanwhile): bring the page up to date behind the message.
+				if (result.type === 'failure') void reload().catch(() => {});
+			};
+		};
 	}
 
 	// Keep an open album current by itself: new items, approvals, and videos on their
@@ -404,36 +481,74 @@
 		else selected.add(id);
 		if (selected.size === 0) selecting = false;
 	}
-	function tileTap(p: MediaItem) {
+	function tileTap(p: MediaItem, tile: HTMLElement) {
 		if (selecting) toggleSelect(p.id);
-		else openLightbox(p);
+		else openLightbox(p, tile);
 	}
 	function exitSelect() {
 		selecting = false;
 		selected.clear();
 	}
 
-	// Native share of a set of media files (falls back to the zip download).
+	// Native share of a set of media files (falls back to the zip download). The share
+	// sheet is handed the files themselves, so they are downloaded first, and a browser
+	// opens that sheet only shortly after a tap. On a slow connection the download
+	// outlasted it: the share was refused, the refusal was taken for "cancelled", and
+	// nothing happened at all. Now a quick download shares at once; a slow one says it is
+	// getting the files and, once they are here, asks for one more tap.
+	const SHARE_AT_ONCE_MS = 2_000;
+	// Up to 100 MB on a weak signal; past this the connection is taken to be dead.
+	const SHARE_DOWNLOAD_TIMEOUT_MS = 5 * 60_000;
+	// Files that are downloaded and wait for the tap that opens the share sheet.
+	let shareReady = $state<File[] | null>(null);
+	let sharePreparing = false;
 	async function shareFiles(photos: MediaItem[]) {
-		if (!photos.length) return;
+		if (!photos.length || sharePreparing) return;
 		const fallback = () => (location.href = `/a/${slug}/download?scope=ids&ids=${photos.map((p) => p.id).join(',')}`);
 		if (photos.length > 10 || photos.reduce((total, photo) => total + photo.sizeBytes, 0) > 100 * 1024 * 1024) {
 			fallback();
 			return;
 		}
+		shareReady = null;
+		sharePreparing = true;
+		const started = Date.now();
+		const slow = setTimeout(() => toast(t('board.toast.sharePreparing')), 800);
+		const abort = new AbortController();
+		const giveUp = setTimeout(() => abort.abort(), SHARE_DOWNLOAD_TIMEOUT_MS);
+		const files: File[] = [];
 		try {
-			const files: File[] = [];
 			for (const photo of photos) {
 				// The file as uploaded, not a video's playback copy.
-				const res = await fetch(photo.download);
+				const res = await fetch(photo.download, { signal: abort.signal });
 				if (!res.ok) throw new Error('media fetch failed');
 				const blob = await res.blob();
 				files.push(new File([blob], `${photo.id}.${blob.type.split('/')[1] || 'bin'}`, { type: blob.type }));
 			}
-			if (navigator.canShare?.({ files })) await navigator.share({ files, title: data.albumName });
-			else fallback();
 		} catch {
-			/* user cancelled */
+			toast(t('board.toast.shareFetchFailed'));
+			return;
+		} finally {
+			clearTimeout(slow);
+			clearTimeout(giveUp);
+			sharePreparing = false;
+		}
+		if (!navigator.canShare?.({ files })) fallback();
+		else if (Date.now() - started > SHARE_AT_ONCE_MS) {
+			toastMsg = ''; // "getting the files ready" is over: the prompt takes its place
+			shareReady = files;
+		} else await openShareSheet(files, false);
+	}
+	async function openShareSheet(files: File[], secondTap: boolean) {
+		shareReady = null;
+		try {
+			await navigator.share({ files, title: data.albumName });
+		} catch (err) {
+			const name = err instanceof DOMException ? err.name : '';
+			if (name === 'AbortError') return; // the share sheet was closed: nothing to say
+			// The tap had gone stale after all: ask for a fresh one. Only once, though; a
+			// browser that refuses a fresh tap as well is not going to change its mind.
+			if (name === 'NotAllowedError' && !secondTap) shareReady = files;
+			else toast(t('board.toast.shareFailed'));
 		}
 	}
 	const shareSelected = () => shareFiles([...selected].map((id) => allById.get(id)).filter(Boolean) as MediaItem[]);
@@ -449,7 +564,7 @@
 			if (!res.ok) throw new Error();
 			// Rejecting a pending upload keeps the viewer open on the next one in the queue.
 			if (p.approved) lightboxIndex = -1;
-			await refreshAll();
+			await reload();
 			endReviewIfDone();
 			toast(t('board.toast.deleted'));
 		} catch {
@@ -475,7 +590,7 @@
 			});
 			if (!res.ok) throw new Error();
 			// Stay in the viewer: while reviewing, the next pending item slides into place.
-			await refreshAll();
+			await reload();
 			endReviewIfDone();
 			toast(t('board.toast.approved'));
 		} catch {
@@ -501,11 +616,13 @@
 		}
 	});
 
-	// Highlight the moment chip for whatever section is on screen.
-	$effect(() => {
-		void data.moments.length; // touch to re-run when moments change
-		const sections = Array.from(document.querySelectorAll<HTMLElement>('section.moment'));
-		const obs = new IntersectionObserver(
+	// Highlight the moment chip for whatever section is on screen. Each section signs
+	// itself up as it appears and off as it goes (see `trackMoment`): sections come and go
+	// with a filter switch, the first items arriving or a refresh, and a list made once
+	// when the number of moments changed stopped following the scroll after any of those.
+	let momentObserver: IntersectionObserver | undefined;
+	function trackMoment(section: HTMLElement) {
+		momentObserver ??= new IntersectionObserver(
 			(entries) => {
 				for (const e of entries) {
 					if (e.isIntersecting) {
@@ -516,9 +633,10 @@
 			},
 			{ rootMargin: '-45% 0px -50% 0px' }
 		);
-		sections.forEach((s) => obs.observe(s));
-		return () => obs.disconnect();
-	});
+		momentObserver.observe(section);
+		return { destroy: () => momentObserver?.unobserve(section) };
+	}
+	onMount(() => () => momentObserver?.disconnect());
 
 	function openShare() {
 		shareMomentId = data.moments[activeMoment]?.id ?? data.moments[0]?.id ?? '';
@@ -535,7 +653,24 @@
 	// Transient failures (proxy resets, 429/502/503/504 while the server is busy) are
 	// retried with jittered exponential backoff instead of discarding the upload.
 	const RETRYABLE = new Set([408, 429, 502, 503, 504]);
-	const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+	// A pause that ends early when `signal` aborts, so Cancel answers at once rather than
+	// after a rate-limit wait of up to two minutes, and with `wakeOnline` as soon as the
+	// device says it is back online. Its listeners go with it however it ends: one was
+	// left behind on `window` for every retry.
+	function sleep(ms: number, { signal, wakeOnline = false }: { signal?: AbortSignal; wakeOnline?: boolean } = {}) {
+		return new Promise<void>((resolve) => {
+			if (signal?.aborted) return resolve();
+			const done = () => {
+				clearTimeout(timer);
+				signal?.removeEventListener('abort', done);
+				if (wakeOnline) removeEventListener('online', done);
+				resolve();
+			};
+			const timer = setTimeout(done, ms);
+			signal?.addEventListener('abort', done, { once: true });
+			if (wakeOnline) addEventListener('online', done, { once: true });
+		});
+	}
 	// `patienceMs` replaces the attempt count with a time budget: keep trying for that
 	// long after the first failure. A phone that loses signal in a lift or hops from
 	// Wi-Fi to mobile data is offline for far longer than six quick attempts (~15 s),
@@ -561,6 +696,14 @@
 		let failingSince = 0;
 		const spent = (attempt: number) =>
 			patienceMs ? Date.now() - (failingSince ||= Date.now()) >= patienceMs : attempt >= attempts;
+		// "Trying again" is said once when the trouble starts and taken back however the
+		// request ends: answered, given up on or cancelled.
+		let troubled = false;
+		const trouble = (failing: boolean) => {
+			if (troubled === failing) return;
+			troubled = failing;
+			onTrouble?.(failing);
+		};
 		// A connection that dies without telling the browser (a phone leaving Wi-Fi, a
 		// proxy that vanishes) leaves fetch waiting for good: no error, so no retry, and
 		// the progress bar simply stops. `timeoutMs` turns that silence into a failed
@@ -578,48 +721,69 @@
 				signal?.removeEventListener('abort', cancel);
 			}
 		};
-		for (let attempt = 1; ; attempt++) {
-			try {
-				const res = await attemptFetch();
-				// A rate limit says exactly when to come back: wait the window out (a few
-				// times at most) rather than burning the short backoff budget and failing.
-				if (res.status === 429 && rateWaits < 3) {
-					const hint = Number(
-						(
-							await res
-								.clone()
-								.json()
-								.catch(() => null)
-						)?.retryAfter
-					);
-					if (Number.isFinite(hint) && hint > 0) {
-						rateWaits++;
-						attempt--;
-						await sleep((Math.min(hint, 120) + Math.random()) * 1000);
-						if (signal?.aborted) throw new DOMException('Aborted', 'AbortError');
-						continue;
+		try {
+			for (let attempt = 1; ; attempt++) {
+				try {
+					const res = await attemptFetch();
+					if (res.status === 429) {
+						const body = await res
+							.clone()
+							.json()
+							.catch(() => null);
+						const hint = Number(body?.retryAfter);
+						// A rate limit says exactly when to come back: wait the window out (a few
+						// times at most) rather than burning the short backoff budget and failing.
+						if (rateWaits < 3 && Number.isFinite(hint) && hint > 0) {
+							rateWaits++;
+							attempt--;
+							await sleep((Math.min(hint, 120) + Math.random()) * 1000, { signal });
+							if (signal?.aborted) throw new DOMException('Aborted', 'AbortError');
+							continue;
+						}
+						// Mira's own rate limit always says when to come back. A 429 in its words
+						// without that is a refusal waiting will not change ("finish or cancel an
+						// upload first"): hand it back now rather than retry it for ten minutes.
+						if (body?.message && body.retryAfter === undefined) return res;
 					}
+					if (!RETRYABLE.has(res.status) || spent(attempt)) return res;
+				} catch (err) {
+					if (signal?.aborted || spent(attempt)) throw err;
 				}
-				if (!RETRYABLE.has(res.status) || spent(attempt)) {
-					if (failingSince) onTrouble?.(false);
-					return res;
-				}
-			} catch (err) {
-				if (signal?.aborted || spent(attempt)) throw err;
+				trouble(true);
+				// With a time budget, cap the pause low and wake the moment the device reports
+				// it is back online, so the upload resumes without the user doing anything.
+				const pause = Math.min(patienceMs ? 8_000 : 30_000, 500 * 2 ** (attempt - 1)) * (0.5 + Math.random());
+				await sleep(pause, { signal, wakeOnline: Boolean(patienceMs) });
+				if (signal?.aborted) throw new DOMException('Aborted', 'AbortError');
 			}
-			onTrouble?.(true);
-			// With a time budget, cap the pause low and wake the moment the device reports
-			// it is back online, so the upload resumes without the user doing anything.
-			const pause = Math.min(patienceMs ? 8_000 : 30_000, 500 * 2 ** (attempt - 1)) * (0.5 + Math.random());
-			await Promise.race([
-				sleep(pause),
-				...(patienceMs ? [new Promise((r) => addEventListener('online', r, { once: true }))] : [])
-			]);
-			if (signal?.aborted) throw new DOMException('Aborted', 'AbortError');
+		} finally {
+			trouble(false);
 		}
 	}
 
+	/** A failure already put into words for the person uploading: the server's reason, or ours. */
+	class UploadProblem extends Error {}
+
 	const IMAGE_EXT = /\.(jpe?g|png|webp|gif|avif|heic|heif|tiff?)$/i;
+	// The same goes for videos: a desktop browser often has no type for .mkv, .3gp or
+	// .m4v. Send the type the server takes for that extension.
+	const VIDEO_TYPE_BY_EXT: Record<string, string> = {
+		mp4: 'video/mp4',
+		m4v: 'video/x-m4v',
+		mov: 'video/quicktime',
+		qt: 'video/quicktime',
+		webm: 'video/webm',
+		mkv: 'video/x-matroska',
+		'3gp': 'video/3gpp'
+	};
+	// No type at all, or the "some bytes" a few browsers give a file they do not know.
+	const untyped = (f: File) => !f.type || f.type === 'application/octet-stream';
+	const videoType = (f: File): string | null =>
+		f.type.startsWith('video/')
+			? f.type
+			: untyped(f)
+				? (VIDEO_TYPE_BY_EXT[f.name.split('.').pop()?.toLowerCase() ?? ''] ?? null)
+				: null;
 	async function onFiles(e: Event) {
 		const input = e.target as HTMLInputElement;
 		const files = [...(input.files ?? [])];
@@ -631,23 +795,55 @@
 		try {
 			// Some browsers report no MIME type for HEIC/AVIF picked from disk; the server
 			// sniffs the real format, so go by extension rather than dropping the file.
-			const images = files.filter((f) => f.type.startsWith('image/') || (!f.type && IMAGE_EXT.test(f.name)));
-			const videos = files.filter((f) => f.type.startsWith('video/'));
+			const images = files.filter((f) => f.type.startsWith('image/') || (untyped(f) && IMAGE_EXT.test(f.name)));
+			const videos = files.flatMap((file) => {
+				const type = videoType(file);
+				return type ? [{ file, type }] : [];
+			});
 			if (images.length + videos.length < files.length) problems.push(t('board.upload.notMedia'));
 			let added = 0;
 			// How many of them only the uploader and the owner can see until approved.
 			let pending = 0;
 			batchDone = 0;
 			batchTotal = images.length + videos.length;
+			// Photos that got no answer at all, even after waiting out an outage. Each is
+			// noted and the batch carries on: one dead photo used to end the whole batch,
+			// skipping the rest of the photos and every video.
+			const unsent: string[] = [];
+			// Once a photo has waited out a whole outage, the next ones are tried once each
+			// rather than ten minutes each; the first one that gets through brings the
+			// patience back.
+			let gaveUp = false;
 			for (const image of images) {
-				const clientId = crypto.randomUUID(); // idempotency key: a retried upload is not a duplicate
-				const res = await fetchWithRetry(`/a/${slug}/upload`, () => {
-					const fd = new FormData();
-					fd.append('clientId', clientId);
-					fd.append('momentId', shareMomentId);
-					fd.append('photos', image);
-					return { method: 'POST', body: fd };
-				});
+				// Idempotency key, the same for every retry: a photo whose answer was lost is
+				// recognised by the server instead of stored twice.
+				const clientId = crypto.randomUUID();
+				let res: Response;
+				try {
+					res = await fetchWithRetry(
+						`/a/${slug}/upload`,
+						() => {
+							const fd = new FormData();
+							fd.append('clientId', clientId);
+							fd.append('momentId', shareMomentId);
+							fd.append('photos', image);
+							return { method: 'POST', body: fd };
+						},
+						// The same protection as a video's pieces: a connection that goes silent
+						// fails the attempt instead of hanging, and an outage is waited out.
+						{
+							...(gaveUp ? { attempts: 1 } : { patienceMs: OUTAGE_PATIENCE_MS }),
+							timeoutMs: photoTimeout(image.size),
+							onTrouble: (bad) => (reconnecting = bad)
+						}
+					);
+				} catch {
+					unsent.push(image.name);
+					gaveUp = true;
+					batchDone++;
+					continue;
+				}
+				gaveUp = !res.ok && RETRYABLE.has(res.status);
 				const out = await res.json().catch(() => ({}));
 				if (res.ok) {
 					added += out.added ?? 0;
@@ -658,19 +854,25 @@
 				}
 				batchDone++;
 			}
-			for (const v of videos) {
+			if (unsent.length === 1) problems.push(t('board.upload.connectionFailed', { name: unsent[0] }));
+			else if (unsent.length) problems.push(t('board.upload.photosFailed', { n: unsent.length }));
+			for (const { file, type } of videos) {
 				try {
-					const outcome = await processVideo(v);
+					const outcome = await processVideo(file, type);
 					if (outcome !== 'skipped') added++;
 					if (outcome === 'pending') pending++;
 				} catch (err) {
-					problems.push(err instanceof Error ? err.message : t('board.toast.couldNotAdd', { name: v.name }));
+					// The server's reason or ours, never the browser's own words ("Failed to
+					// fetch", "Load failed"): they say nothing useful and are always in English.
+					problems.push(
+						err instanceof UploadProblem ? err.message : t('board.upload.connectionFailed', { name: file.name })
+					);
 				}
 				batchDone++;
 			}
 			// Refreshing the album is a courtesy. On a connection that has gone silent it
 			// never returns, and the button would read "Uploading…" until the page is reloaded.
-			await Promise.race([refreshAll(), sleep(20_000)]);
+			await Promise.race([reload().catch(() => {}), sleep(20_000)]);
 			const uniq = [...new Set(problems)];
 			if (added && !uniq.length && pending)
 				// Say what really happened: it is in, but the group cannot see it yet.
@@ -722,21 +924,27 @@
 	// Upload a video by streaming the ORIGINAL to the server in <100 MB chunks (the proxy
 	// caps a single request body at ~100 MB), then asking the server to reassemble +
 	// optimize. Returns 'added' | 'pending' (added, awaiting the owner's approval) |
-	// 'skipped' (cancel); throws with a message on hard failure.
-	async function processVideo(file: File): Promise<'added' | 'pending' | 'skipped'> {
-		const initRes = await fetch(`/a/${slug}/video/init`, {
-			method: 'POST',
-			headers: { 'content-type': 'application/json' },
-			body: JSON.stringify({
-				momentId: shareMomentId,
-				mime: file.type || 'video/mp4',
-				totalBytes: file.size,
-				name: file.name
-			})
-		});
+	// 'skipped' (cancel); throws an UploadProblem with a message on hard failure (and
+	// anything else when the connection failed for good).
+	async function processVideo(file: File, type: string): Promise<'added' | 'pending' | 'skipped'> {
+		// Retried like the pieces that follow, with one key for every try: when a reply is
+		// lost, the server recognises the resend and hands back the same upload (marked
+		// `duplicate`, used just like a new one) instead of starting a second, empty one.
+		const clientId = crypto.randomUUID();
+		const initRes = await fetchWithRetry(
+			`/a/${slug}/video/init`,
+			() => ({
+				method: 'POST',
+				headers: { 'content-type': 'application/json' },
+				body: JSON.stringify({ clientId, momentId: shareMomentId, mime: type, totalBytes: file.size, name: file.name })
+			}),
+			{ patienceMs: OUTAGE_PATIENCE_MS, timeoutMs: POLL_TIMEOUT_MS, onTrouble: (bad) => (reconnecting = bad) }
+		);
 		if (!initRes.ok) {
 			const e = await initRes.json().catch(() => null);
-			throw new Error(e?.message || t('board.upload.couldNotStart'));
+			if (initRes.status === 415) throw new UploadProblem(t('board.upload.videoUnsupported'));
+			// Anything else (paused, closed, too big, no room) comes in the server's words.
+			throw new UploadProblem(e?.message || t('board.upload.couldNotStart'));
 		}
 		const { uploadId, chunkSize } = await initRes.json();
 		const total = Math.max(1, Math.ceil(file.size / chunkSize));
@@ -763,10 +971,22 @@
 						onTrouble: (bad) => (reconnecting = bad)
 					}
 				);
-				if (!r.ok) throw new Error(t('board.upload.chunkFailed'));
+				if (!r.ok) {
+					// A refusal (413: a quiet upload no longer fits; 403: this browser is no
+					// longer that member) is final and comes in the server's words.
+					const e = await r.json().catch(() => null);
+					throw new UploadProblem(e?.message || t('board.upload.chunkFailed'));
+				}
 				uploadPct = Math.min(99, Math.round(((i + 1) / total) * 100));
 			}
 			awake.release(); // the server has everything; the phone may sleep again
+			// Cancel is offered only while it can still stop something. With every byte on
+			// the server, the server finishes the video by itself (see finalizeReady), and
+			// its cancel only stops an upload that is still receiving: past this point
+			// Cancel would say "cancelled" about a video that then appears anyway. So the
+			// overlay moves on (and hides Cancel) before the first request to complete it.
+			if (uploadCanceled) throw new DOMException('Aborted', 'AbortError');
+			uploadStage = 'assembling';
 			// Completion runs server-side in the background: 202 means "still assembling /
 			// optimising", so poll until 200 (or a real error) instead of timing out.
 			// The server bounds the work itself (queue wait plus a size-based encode limit);
@@ -790,23 +1010,18 @@
 				const phase = info?.status === 'waiting' ? 'waiting' : info?.phase;
 				uploadStage = ['waiting', 'queued', 'compressing', 'saving'].includes(phase) ? phase : 'assembling';
 				if (uploadStage === 'compressing') uploadPct = Math.max(0, Math.min(100, Number(info?.percent) || 0));
-				if (Date.now() > deadline) throw new Error(t('board.upload.finalizeFailed'));
+				if (Date.now() > deadline) throw new UploadProblem(t('board.upload.finalizeFailed'));
 				await sleep(3_000);
 			}
 			if (!cr.ok) {
 				const e = await cr.json().catch(() => null);
-				throw new Error(e?.message || t('board.upload.finalizeFailed'));
+				throw new UploadProblem(e?.message || t('board.upload.finalizeFailed'));
 			}
 			uploadPct = 100;
-			const { mediaItemId, pending } = await cr.json();
-			const poster = await makePoster(file).catch(() => null);
-			if (poster && mediaItemId) {
-				const fd = new FormData();
-				fd.append('mediaItemId', mediaItemId);
-				fd.append('poster', poster, 'poster.webp');
-				await fetch(`/a/${slug}/poster`, { method: 'POST', body: fd });
-			}
-			return pending ? 'pending' : 'added';
+			const saved = await cr.json().catch(() => null);
+			// The video is in the album from here on, whatever happens to its poster.
+			await sendPoster(file, saved?.mediaItemId);
+			return saved?.pending ? 'pending' : 'added';
 		} catch (err) {
 			// Best-effort: tell the server to drop the staged chunks.
 			fetch(`/a/${slug}/video/abort?uploadId=${encodeURIComponent(uploadId)}`, {
@@ -824,11 +1039,52 @@
 		}
 	}
 
+	/**
+	 * Give a saved video the poster made from it here. A nicety on top of the one the
+	 * server makes itself: if it cannot be made or sent, the video simply keeps that one,
+	 * and is never reported as failed for it (the upload behind it went through).
+	 */
+	async function sendPoster(file: File, mediaItemId: string | undefined) {
+		if (!mediaItemId) return;
+		try {
+			const poster = await makePoster(file);
+			await fetchWithRetry(
+				`/a/${slug}/poster`,
+				() => {
+					const fd = new FormData();
+					fd.append('mediaItemId', mediaItemId);
+					fd.append('poster', poster, 'poster.webp');
+					return { method: 'POST', body: fd };
+				},
+				{ attempts: 3, timeoutMs: POLL_TIMEOUT_MS }
+			);
+		} catch {
+			/* no poster from this browser; the server's stays */
+		}
+	}
+
+	// A video that never says it has seeked or failed (an odd codec, a browser that will
+	// not decode a file in the background) would otherwise hold the overlay at 100% for good.
+	const POSTER_TIMEOUT_MS = 20_000;
 	// Grab a mid-clip frame client-side as the poster (no server ffmpeg needed).
 	function makePoster(file: File): Promise<Blob> {
 		return new Promise((resolve, reject) => {
 			const url = URL.createObjectURL(file);
 			const v = document.createElement('video');
+			// However it ends (a frame, an error, or no word in time), it ends once, and
+			// the object URL holding the whole file is let go.
+			let settled = false;
+			const finish = (result: Blob | Error) => {
+				if (settled) return;
+				settled = true;
+				clearTimeout(timer);
+				v.removeAttribute('src');
+				v.load(); // stop decoding the file
+				URL.revokeObjectURL(url);
+				if (result instanceof Blob) resolve(result);
+				else reject(result);
+			};
+			const timer = setTimeout(() => finish(new Error('poster timed out')), POSTER_TIMEOUT_MS);
 			v.preload = 'metadata';
 			v.muted = true;
 			v.playsInline = true;
@@ -841,6 +1097,7 @@
 				}
 			};
 			v.onseeked = () => {
+				if (settled) return;
 				const sourceWidth = v.videoWidth || 640;
 				const sourceHeight = v.videoHeight || 640;
 				const scale = Math.min(1, 1280 / Math.max(sourceWidth, sourceHeight));
@@ -851,25 +1108,13 @@
 				c.height = h;
 				const ctx = c.getContext('2d');
 				if (!ctx) {
-					URL.revokeObjectURL(url);
-					reject(new Error('no canvas'));
+					finish(new Error('no canvas'));
 					return;
 				}
 				ctx.drawImage(v, 0, 0, w, h);
-				c.toBlob(
-					(b) => {
-						URL.revokeObjectURL(url);
-						if (b) resolve(b);
-						else reject(new Error('no blob'));
-					},
-					'image/webp',
-					0.7
-				);
+				c.toBlob((b) => finish(b ?? new Error('no blob')), 'image/webp', 0.7);
 			};
-			v.onerror = () => {
-				URL.revokeObjectURL(url);
-				reject(new Error('video error'));
-			};
+			v.onerror = () => finish(new Error('video error'));
 		});
 	}
 
@@ -944,12 +1189,62 @@
 		applyPreview();
 	}
 
-	function openLightbox(p: MediaItem) {
+	function openLightbox(p: MediaItem, tile?: HTMLElement) {
 		const i = flat.findIndex((x) => x.id === p.id);
+		viewerOpener = tile ?? null;
 		lightboxIndex = i >= 0 ? i : 0;
 	}
 	const lightboxNext = () => (lightboxIndex = Math.min(lightboxIndex + 1, flat.length - 1));
 	const lightboxPrev = () => (lightboxIndex = Math.max(lightboxIndex - 1, 0));
+
+	// The item on screen can leave the list under the viewer: unliked in "Liked by me", or
+	// removed meanwhile. Stay on a real item (the one that took its place, or the new last
+	// one) and close when none is left. A position past the end used to linger, and the
+	// next arrow key or clearing the filter popped the viewer open on an unrelated photo.
+	$effect(() => {
+		if (lightboxIndex >= flat.length) lightboxIndex = flat.length - 1;
+	});
+
+	// The viewer is a modal dialog. Focus goes into it when it opens and stays inside: Tab
+	// wraps around (see `keepFocusInViewer`), and when the previous or next button goes
+	// away at either end while it has focus, focus moves on instead of falling to the
+	// page behind. On closing, focus returns to the tile the viewer was opened from.
+	let viewerEl = $state<HTMLDivElement>();
+	let viewerOpener: HTMLElement | null = null;
+	const viewerOpen = $derived(lightboxPhoto !== null);
+	$effect(() => {
+		if (!viewerOpen) return;
+		const opener = viewerOpener;
+		void tick().then(() => viewerEl?.focus({ preventScroll: true }));
+		return () => {
+			if (opener?.isConnected) opener.focus({ preventScroll: true });
+		};
+	});
+	$effect(() => {
+		void lightboxIndex; // another item: the buttons around it may have changed
+		void tick().then(() => {
+			if (!viewerEl?.isConnected || viewerEl.contains(document.activeElement)) return;
+			(viewerEl.querySelector<HTMLElement>('.nav') ?? viewerEl).focus({ preventScroll: true });
+		});
+	});
+	function keepFocusInViewer(e: KeyboardEvent) {
+		if (!viewerEl) return;
+		const stops = [...viewerEl.querySelectorAll<HTMLElement>('a[href], button:not([disabled]), video[controls]')];
+		if (!stops.length) return;
+		const first = stops[0];
+		const last = stops[stops.length - 1];
+		const at = document.activeElement;
+		if (!(at instanceof Node) || !viewerEl.contains(at) || at === viewerEl) {
+			e.preventDefault();
+			(e.shiftKey ? last : first).focus();
+		} else if (e.shiftKey && at === first) {
+			e.preventDefault();
+			last.focus();
+		} else if (!e.shiftKey && at === last) {
+			e.preventDefault();
+			first.focus();
+		}
+	}
 
 	let heartPop = $state(false);
 	function likeWithPop() {
@@ -972,8 +1267,9 @@
 	}
 
 	function onKey(e: KeyboardEvent) {
-		if (lightboxIndex >= 0) {
-			if (e.key === 'ArrowRight') lightboxNext();
+		if (lightboxPhoto) {
+			if (e.key === 'Tab') keepFocusInViewer(e);
+			else if (e.key === 'ArrowRight') lightboxNext();
 			else if (e.key === 'ArrowLeft') lightboxPrev();
 			else if (e.key === 'Escape') lightboxIndex = -1;
 		} else if (e.key === 'Escape' && selecting) {
@@ -985,6 +1281,22 @@
 
 <svelte:head><title>{data.albumName} · Mira</title></svelte:head>
 <svelte:window onkeydown={onKey} bind:innerWidth={vw} />
+
+{#snippet problemFor(form: string)}
+	{#if formProblem?.form === form}<p class="err" role="alert">{formProblem.message}</p>{/if}
+{/snippet}
+
+{#snippet sharePrompt()}
+	<!-- The files arrived after the tap that asked for them had gone stale: one more tap
+	     opens the share sheet. Inside the viewer when it is open, so Tab can reach it. -->
+	<div class="shareready" role="status">
+		<span>{t('board.shareReady')}</span>
+		<button class="sharego" onclick={() => shareReady && openShareSheet(shareReady, true)}
+			><Share2 size={17} /> {t('board.share')}</button
+		>
+		<button class="sharedrop" aria-label={t('board.close')} onclick={() => (shareReady = null)}><X size={17} /></button>
+	</div>
+{/snippet}
 
 <nav class="topnav" aria-label={t('board.nav.album')}>
 	<!-- The album's name leads the page: a guest arriving from a link must see where
@@ -1067,7 +1379,7 @@
 			{@const shown = shownIn(m)}
 			{@const waiting = preparingIn(m.id)}
 			{#if shown.length || waiting.length}
-				<section class="moment" id={`m${i}`} data-i={i}>
+				<section class="moment" id={`m${i}`} data-i={i} use:trackMoment>
 					<div class={layout === 'feed' ? 'feed' : 'grid'}>
 						{#each shown as p (p.id)}
 							{#if layout === 'feed'}
@@ -1078,7 +1390,7 @@
 											? t('board.openVideoBy', { by: p.by })
 											: t('board.openPhotoBy', { by: p.by })}
 										use:longpress={{ onpress: () => enterSelect(p), enabled: () => !selecting }}
-										onclick={() => tileTap(p)}
+										onclick={(e) => tileTap(p, e.currentTarget)}
 									>
 										<img src={p.thumb} alt={t('board.by', { by: p.by })} loading="lazy" decoding="async" />
 										{#if p.kind === 'video'}<span class="playbadge" aria-hidden="true"
@@ -1109,7 +1421,7 @@
 											? t('board.openVideoBy', { by: p.by })
 											: t('board.openPhotoBy', { by: p.by })}
 										use:longpress={{ onpress: () => enterSelect(p), enabled: () => !selecting }}
-										onclick={() => tileTap(p)}
+										onclick={(e) => tileTap(p, e.currentTarget)}
 									>
 										<img
 											src={p.thumb}
@@ -1189,9 +1501,12 @@
 			<div class="share closednote"><Lock size={18} /> {t('board.closed.short')}</div>
 		{:else}
 			<button class="share" onclick={openShare} disabled={busy}>
-				{#if busy}{batchTotal > 1
-						? t('board.uploadingCount', { done: Math.min(batchDone + 1, batchTotal), total: batchTotal })
-						: t('board.uploading')}{:else}<Plus size={20} /> {t('board.share')}{/if}
+				<!-- During an outage the count stands still for minutes: say why. -->
+				{#if busy}{reconnecting
+						? t('board.retrying')
+						: batchTotal > 1
+							? t('board.uploadingCount', { done: Math.min(batchDone + 1, batchTotal), total: batchTotal })
+							: t('board.uploading')}{:else}<Plus size={20} /> {t('board.share')}{/if}
 			</button>
 		{/if}
 		{#each alloc.visible as a (a.id)}
@@ -1260,14 +1575,10 @@
 			<form
 				method="POST"
 				action="?/setLocked"
-				use:enhance={() =>
-					async ({ update, result }) => {
-						await update({ reset: false });
-						if (result.type === 'success') {
-							menuOpen = false;
-							toast(data.locked ? t('board.toast.closed') : t('board.toast.reopened'));
-						}
-					}}
+				use:enhance={sheetForm('setLocked', (out) => {
+					menuOpen = false;
+					toast(out?.locked ? t('board.toast.closed') : t('board.toast.reopened'));
+				})}
 			>
 				<input type="hidden" name="locked" value={data.locked ? '0' : '1'} />
 				<button class="row" type="submit">
@@ -1281,6 +1592,7 @@
 						>
 					{/if}
 				</button>
+				{@render problemFor('setLocked')}
 			</form>
 			<button class="row" onclick={openReturn}>
 				<span class="ic"><Smartphone size={20} /></span><span class="m"
@@ -1335,19 +1647,16 @@
 			<form
 				method="POST"
 				action="?/resetInvite"
-				use:enhance={({ cancel }) => {
-					if (!confirm(t('board.invite.resetConfirm'))) cancel();
-					return async ({ update, result }) => {
-						await update({ reset: false });
-						if (result.type === 'success') toast(t('board.toast.linkReset'));
-					};
-				}}
+				use:enhance={sheetForm('resetInvite', () => toast(t('board.toast.linkReset')), {
+					confirmFirst: t('board.invite.resetConfirm')
+				})}
 			>
 				<button class="row" type="submit">
 					<span class="ic"><RefreshCw size={20} /></span><span class="m"
 						>{t('board.invite.reset')}<small>{t('board.invite.resetSub')}</small></span
 					>
 				</button>
+				{@render problemFor('resetInvite')}
 			</form>
 		{/if}
 		<button class="ghost" onclick={() => (inviteOpen = false)}>{t('board.done')}</button>
@@ -1377,12 +1686,7 @@
 			<form
 				method="POST"
 				action="?/returnLink"
-				use:enhance={() =>
-					async ({ result }) => {
-						if (result.type === 'success' && result.data?.returnLink) {
-							returnInfo = result.data.returnLink as typeof returnInfo;
-						} else toast(t('board.toast.copyFailed'));
-					}}
+				use:enhance={sheetForm('returnLink', showReturnLink, { refresh: false })}
 			>
 				{#if data.isOwner}
 					{#each returnable as person (person.id)}
@@ -1396,6 +1700,8 @@
 						>{t('board.menu.moveDevice')}</button
 					>
 				{/if}
+				<!-- Making the link failed: say so (it used to say "Copy failed"). -->
+				{@render problemFor('returnLink')}
 			</form>
 		{/if}
 		<button class="ghost" onclick={() => (returnOpen = false)}>{t('board.done')}</button>
@@ -1525,18 +1831,15 @@
 		<form
 			method="POST"
 			action="?/renameMoment"
-			use:enhance={() =>
-				async ({ update, result }) => {
-					await update({ reset: false });
-					if (result.type === 'success') {
-						renameOpen = false;
-						toast(t('board.toast.renamed'));
-					}
-				}}
+			use:enhance={sheetForm('renameMoment', () => {
+				renameOpen = false;
+				toast(t('board.toast.renamed'));
+			})}
 		>
 			<input type="hidden" name="momentId" value={renameMomentId} />
 			<label class="field" for="momrename">{t('board.name')}</label>
 			<input id="momrename" type="text" name="name" maxlength="120" bind:value={renameMomentName} required />
+			{@render problemFor('renameMoment')}
 			<button class="primary" type="submit">{t('board.rename.save')}</button>
 		</form>
 		<button class="ghost" onclick={() => (renameOpen = false)}>{t('board.cancel')}</button>
@@ -1549,14 +1852,10 @@
 		<form
 			method="POST"
 			action="?/createMoment"
-			use:enhance={() =>
-				async ({ update, result }) => {
-					await update();
-					if (result.type === 'success') {
-						momentOpen = false;
-						toast(t('board.toast.momentAdded'));
-					}
-				}}
+			use:enhance={sheetForm('createMoment', () => {
+				momentOpen = false;
+				toast(t('board.toast.momentAdded'));
+			})}
 		>
 			<label class="field" for="momname">{t('board.name')}</label>
 			<input
@@ -1567,6 +1866,7 @@
 				placeholder={t('board.moment.placeholder')}
 				required
 			/>
+			{@render problemFor('createMoment')}
 			<button class="primary" type="submit">{t('board.moment.add')}</button>
 		</form>
 		<button class="ghost" onclick={() => (momentOpen = false)}>{t('board.cancel')}</button>
@@ -1579,14 +1879,10 @@
 		<form
 			method="POST"
 			action="?/personalize"
-			use:enhance={() =>
-				async ({ update, result }) => {
-					await update({ reset: false });
-					if (result.type === 'success') {
-						editOpen = false;
-						toast(t('board.toast.saved'));
-					}
-				}}
+			use:enhance={sheetForm('personalize', () => {
+				editOpen = false;
+				toast(t('board.toast.saved'));
+			})}
 		>
 			<label class="field" for="albname">{t('board.personalize.albumName')}</label>
 			<input id="albname" type="text" name="name" maxlength="120" value={data.albumName} />
@@ -1617,6 +1913,7 @@
 			/>
 
 			<input type="hidden" name="skin" value={editSkin} />
+			{@render problemFor('personalize')}
 			<button class="primary" type="submit">{t('board.save')}</button>
 		</form>
 		<button class="ghost" onclick={closeEdit}>{t('board.cancel')}</button>
@@ -1624,7 +1921,14 @@
 {/if}
 
 {#if lightboxPhoto}
-	<div class="lb" role="dialog" aria-modal="true" aria-label={t('board.lightbox.label')}>
+	<div
+		class="lb"
+		role="dialog"
+		aria-modal="true"
+		aria-label={t('board.lightbox.label')}
+		tabindex="-1"
+		bind:this={viewerEl}
+	>
 		<div class="top">
 			<span
 				>{t('board.by', { by: lightboxPhoto.by })} · <span class="count">{lightboxIndex + 1}/{flat.length}</span></span
@@ -1738,10 +2042,54 @@
 				{/if}
 			{/if}
 		</div>
+		{#if shareReady}{@render sharePrompt()}{/if}
 	</div>
+{:else if shareReady}
+	{@render sharePrompt()}
 {/if}
 
 <style>
+	.lb:focus {
+		outline: none;
+	}
+	/* "Ready to share": above the bar and the toast, and above the viewer when it is open */
+	.shareready {
+		position: fixed;
+		left: 50%;
+		bottom: calc(150px + env(safe-area-inset-bottom));
+		transform: translateX(-50%);
+		z-index: 95;
+		display: flex;
+		align-items: center;
+		gap: 10px;
+		width: max-content;
+		max-width: calc(100% - 32px);
+		padding: 8px 8px 8px 16px;
+		border-radius: 14px;
+		background: var(--ink);
+		color: var(--bg);
+		font-size: 14px;
+		font-weight: 600;
+		box-shadow: var(--shadow);
+	}
+	.sharego {
+		display: flex;
+		align-items: center;
+		gap: 6px;
+		padding: 9px 14px;
+		border-radius: 10px;
+		background: var(--accent);
+		color: var(--accent-ink);
+		font-weight: 800;
+	}
+	.sharedrop {
+		display: grid;
+		place-items: center;
+		width: 34px;
+		height: 34px;
+		border-radius: 10px;
+		color: inherit;
+	}
 	.closednote {
 		display: flex;
 		align-items: center;

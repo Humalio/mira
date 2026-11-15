@@ -29,8 +29,9 @@ Then:
 docker compose up -d
 ```
 
-Forward HTTPS traffic to `127.0.0.1:5180`, open your address and sign in with the
-password. The database is set up on the first start.
+Forward HTTPS traffic to `127.0.0.1:5180` (the proxy must also send one header, see
+"Reverse proxy" below), open your address and sign in with the password. The database
+is set up on the first start.
 
 | Setting                 | What it is                                                                                                                                                                     |
 | ----------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
@@ -47,12 +48,31 @@ password. The database is set up on the first start.
 To try Mira on the computer you are sitting at, without a domain or HTTPS, set
 `ORIGIN=http://localhost:5180` and open that address after `docker compose up -d`.
 
+### Reverse proxy
+
+Mira limits how often one visitor can open albums and invitations or join one, and tells
+visitors apart by the address your proxy passes on in the `X-Forwarded-For` header
+(`ADDRESS_HEADER`, which defaults to it). **The proxy must send that header.** Caddy and
+Traefik do by default; in nginx add this to the `location` that forwards to Mira:
+
+```nginx
+proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+```
+
+Without it Mira cannot tell guests apart: they all share one set of limits, so one busy
+phone can hold everyone up, and the server log says once that the client address is
+unknown. `XFF_DEPTH` (default 1) takes the address added by the proxy nearest to Mira;
+add one for each further trusted proxy in front of it, such as a CDN. Do not expose the
+container port directly while trusting forwarded headers, or anyone could claim any
+address.
+
 ### Building the image yourself
 
 The Compose file runs the published image of this version,
 `ghcr.io/humalio/mira:0.1.0`. Until that release is published on the
 [releases page](https://github.com/Humalio/mira/releases), or to run your own changes,
-build the image from a clone of this repository instead:
+build the image from a clone of this repository instead (building needs Docker Engine
+25 or later):
 
 ```sh
 git clone https://github.com/Humalio/mira.git
@@ -66,10 +86,6 @@ start the same Compose file from there:
 ```sh
 docker compose --env-file .env -f deploy/compose.prod.yaml up -d
 ```
-
-Configure the proxy to forward client addresses and match `ADDRESS_HEADER` /
-`XFF_DEPTH` to the trusted proxy chain. Do not expose the container directly when
-trusting forwarded headers.
 
 The Compose file uses named volumes for PostgreSQL and `/data`; media lives at
 `/data/media`, and video uploads in progress are staged beside it in `/data/.uploads`
@@ -306,7 +322,9 @@ a replacement waits up to 90 seconds for the previous process to stop. Losing th
 lock connection terminates the server. Allow 120 seconds for container shutdown: a
 stopping server keeps the lock until the video it is putting together is finished (or
 the container is killed), so a replacement never starts on that video's files while
-the old process is still writing them.
+the old process is still writing them. A container stopped while it is still starting
+(waiting for the database or for the previous process) stops at once. Docker reports it
+as starting, not unhealthy, for up to three minutes while it waits.
 Video finalizations interrupted by a restart are run again automatically on startup.
 
 ## Release checks and website
@@ -321,7 +339,7 @@ only the introduction and hosting guide, not the application.
 
 ## Versioned GitHub images
 
-Download `compose.yaml` and `environment.example` from a published GitHub Release into one folder. Save the example as `.env`, fill in the required values, and select that release's image version. The Compose file pulls the prebuilt image; Node, Python and build tools are unnecessary on your server.
+Download `compose.yaml` and `environment.example` from a published GitHub Release into one folder. Save the example as `.env` and fill in the required values: set `ORIGIN` to your address, and leave `PUBLIC_ORIGIN` commented out unless invitations should use a different one. The example already names that release's image in `MIRA_IMAGE`. The Compose file pulls the prebuilt image; Node, Python and build tools are unnecessary on your server.
 
 The source repository also provides `deploy/compose.prod.yaml`. From its root run:
 

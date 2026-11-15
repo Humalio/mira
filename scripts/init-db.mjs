@@ -1,11 +1,11 @@
 import { readFile } from 'node:fs/promises';
-import { createHash } from 'node:crypto';
 import postgres from 'postgres';
+import { schemaFingerprints } from './schema-fingerprint.mjs';
 
 const url = process.env.DATABASE_URL;
 if (!url) throw new Error('DATABASE_URL is required');
 const schema = (await readFile(new URL('../database/schema.sql', import.meta.url), 'utf8')).replaceAll('\r\n', '\n');
-const fingerprint = createHash('sha256').update(schema).digest('hex');
+const { current: fingerprint, legacy: legacyFingerprint } = schemaFingerprints(schema);
 const client = postgres(url, { max: 1, connect_timeout: 10 });
 
 // After a host reboot or `docker compose restart` the database container starts at the
@@ -33,7 +33,16 @@ try {
 		const [state] = await tx`select to_regclass('public.mira_schema') as marker`;
 		if (state.marker) {
 			const rows = await tx`select fingerprint from public.mira_schema where id = 1`;
-			if (rows.length !== 1 || rows[0].fingerprint !== fingerprint) {
+			const stored = rows.length === 1 ? rows[0].fingerprint : undefined;
+			if (stored === legacyFingerprint) {
+				// Set up from this same schema by a version that hashed the file's exact text.
+				// Record it the current way, under the lock above, so the next start (and a later
+				// comment-only edit of schema.sql) still recognises it.
+				await tx`update public.mira_schema set fingerprint = ${fingerprint} where id = 1`;
+				console.log('Mira database already initialized; schema marker updated');
+				return;
+			}
+			if (stored !== fingerprint) {
 				throw new Error('Database schema differs from this day-zero release. Use a fresh database.');
 			}
 			console.log('Mira database already initialized');

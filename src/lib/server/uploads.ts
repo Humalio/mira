@@ -28,11 +28,21 @@ export const uploadUnderWay = (now = Date.now()) =>
 		)
 	);
 
+/** The same test as `uploadUnderWay`, for a session already read. */
+export function isUnderWay(session: Pick<UploadSession, 'state' | 'expiresAt'>, now = Date.now()): boolean {
+	return (
+		session.state === 'completing' ||
+		(session.state === 'receiving' && session.expiresAt.getTime() > now + UPLOAD_TTL_MS - UPLOAD_QUIET_MS)
+	);
+}
+
 /**
  * SQL expression: the storage one unfinished upload holds back from its album's owner.
  * An upload under way holds everything it declared, so that a video which was let
  * start can also finish. An abandoned one holds only what actually arrived: five
  * dead 2 GB uploads used to keep a 10 GB account "full" for a day with an empty disk.
+ * The space it gave back may go to another upload, so one that comes back to life is
+ * admitted again before it holds its full size once more (see video/chunk).
  */
 export const reservedUploadBytes = (now = Date.now()) =>
 	sql<string>`coalesce(sum(case when ${uploadUnderWay(now)} then ${uploadSessions.declaredBytes} else ${uploadSessions.receivedBytes} end), 0)`;
@@ -41,8 +51,16 @@ export async function getUploadSession(id: string): Promise<UploadSession | unde
 	return (await db.select().from(uploadSessions).where(eq(uploadSessions.id, id)).limit(1))[0];
 }
 
-/** Bounded cleanup batch; run from the maintenance loop (see maintenance.ts), not the request path. */
-export async function cleanupExpiredUploadSessions(now = new Date()): Promise<void> {
+/**
+ * Bounded cleanup batch; run from the maintenance loop (see maintenance.ts), not the request path.
+ * `stillWorking` names the uploads this process is finalising right now. Such a lease can
+ * lapse only because the database was away and could not renew it, which is no crash,
+ * so they are left alone.
+ */
+export async function cleanupExpiredUploadSessions(
+	now = new Date(),
+	stillWorking: (uploadId: string) => boolean = () => false
+): Promise<void> {
 	const expired = await db
 		.select({ id: uploadSessions.id, state: uploadSessions.state, albumSlug: albums.slug })
 		.from(uploadSessions)
@@ -50,6 +68,7 @@ export async function cleanupExpiredUploadSessions(now = new Date()): Promise<vo
 		.where(lt(uploadSessions.expiresAt, now))
 		.limit(100);
 	for (const row of expired) {
+		if (row.state === 'completing' && stillWorking(row.id)) continue;
 		try {
 			if (row.state !== 'complete') {
 				// A completing request can win the race after the initial SELECT. Claim

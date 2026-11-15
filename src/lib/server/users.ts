@@ -1,4 +1,4 @@
-import { and, eq, sql } from 'drizzle-orm';
+import { and, eq, sql, type SQL } from 'drizzle-orm';
 import { db } from './db';
 import { newId } from './ids';
 import { LOCAL_ACCOUNT, LOCAL_PROVIDER, isLocalAdmin, localAdmin } from './local-admin';
@@ -28,28 +28,33 @@ export function isConfiguredAdmin(provider: string, providerAccountId: string): 
 }
 
 /**
+ * A condition for counting administrators: it leaves out the password account while the
+ * password sign-in is off (undefined, so no condition, while it is on). That row stays
+ * in the database after `MIRA_ADMIN_PASSWORD` is removed, still marked administrator,
+ * but nobody can sign in to it any more. Every "is there an administrator left?" check
+ * uses this, so none of them mistakes it for someone who can still open /admin.
+ */
+export function reachableAdministrator(): SQL | undefined {
+	if (localAdmin().enabled) return undefined;
+	return sql`not (${users.provider} = ${LOCAL_PROVIDER} and ${users.providerAccountId} = ${LOCAL_ACCOUNT})`;
+}
+
+/**
  * Does this copy of Mira have someone in charge: an administrator named in the
  * environment, or an administrator account? "Closed" registration only binds once
  * there is one. Without anybody able to open the door again, closing it would lock
  * the installation for good.
  *
- * The password account only counts while the password sign-in is on. Its row stays in
- * the database after `MIRA_ADMIN_PASSWORD` is removed, still marked administrator, but
- * nobody can sign in to it any more: counting it kept registration closed on a copy
- * that had just moved to Google or GitHub, so the first sign-in there was refused.
+ * The password account only counts while the password sign-in is on (see
+ * `reachableAdministrator`): counting its leftover row kept registration closed on a
+ * copy that had just moved to Google or GitHub, so the first sign-in there was refused.
  */
 export async function hasAdministrator(): Promise<boolean> {
 	if (configuredAdmins().length || localAdmin().enabled) return true;
-	// Reached only with the password sign-in off (see the line above).
 	const [row] = await db
 		.select({ id: users.id })
 		.from(users)
-		.where(
-			and(
-				eq(users.isAdmin, true),
-				sql`not (${users.provider} = ${LOCAL_PROVIDER} and ${users.providerAccountId} = ${LOCAL_ACCOUNT})`
-			)
-		)
+		.where(and(eq(users.isAdmin, true), reachableAdministrator()))
 		.limit(1);
 	return Boolean(row);
 }
@@ -134,11 +139,18 @@ export async function authorizeSignIn(id: ProviderIdentity): Promise<boolean> {
 				adminFromEnv = true;
 			} else if (existing.adminFromEnv && existing.isAdmin) {
 				// The identity was removed from MIRA_ADMIN_IDENTITIES: revoke the rights it
-				// granted, unless that would leave the platform with no active admin.
+				// granted, unless that would leave the platform with no active admin. A
+				// leftover password account is nobody: counting it took the rights of the
+				// last administrator who could still sign in.
 				const [{ others }] = await tx
 					.select({ others: sql<number>`count(*)::int` })
 					.from(users)
-					.where(sql`${users.isAdmin} and not ${users.isBlocked} and ${users.id} <> ${existing.id}`);
+					.where(
+						and(
+							sql`${users.isAdmin} and not ${users.isBlocked} and ${users.id} <> ${existing.id}`,
+							reachableAdministrator()
+						)
+					);
 				if (others > 0) {
 					isAdmin = false;
 					adminFromEnv = false;

@@ -8,15 +8,24 @@
  * guest can issue one for themselves before switching phones (valid fifteen minutes).
  *
  * The link is a signed statement "this is guest M, until time E", bound to the
- * device code M has right now. It needs no database table, and it works exactly once:
- * using it changes M's device code, which makes the signature stale.
+ * device code M has right now and to the version of M's database row. It needs no
+ * database table, and it works exactly once: using it changes M's row, which makes the
+ * signature stale.
+ *
+ * The device code alone was not enough. It goes back to an earlier value when Zoe moves
+ * to her new phone and later back to the old one, and every unexpired link made for the
+ * old phone would have worked again. The row version is Postgres's `xmin`, the
+ * transaction that last wrote the row: every move writes the row, and Postgres does not
+ * hand out a transaction number again for billions of transactions, so a used link
+ * cannot come back. Nothing else writes a guest's row while it can still be moved:
+ * linking it to an account or retiring it ends that anyway.
  *
  * What it is worth: whoever opens a valid link becomes that guest, with their name,
  * their uploads (which they may delete) and their favourites. It is no more than the
  * guest's own cookie was worth, it expires, and an account owner never needs one.
  */
 import { createHmac, timingSafeEqual } from 'node:crypto';
-import { and, eq, sql } from 'drizzle-orm';
+import { and, eq, getTableColumns, sql } from 'drizzle-orm';
 import { db } from './db';
 import { favorites, members, photos, uploadSessions, type Member } from './schema';
 import { UUID_PATTERN } from './input';
@@ -24,19 +33,40 @@ import { UUID_PATTERN } from './input';
 export const OWNER_ISSUED_MS = 24 * 60 * 60_000;
 export const SELF_ISSUED_MS = 15 * 60_000;
 
+/** A member as return links see it: the row and its current version (see above). */
+export type ReturnTarget = Member & { version: string };
+type Signed = Pick<ReturnTarget, 'id' | 'deviceToken' | 'version'>;
+
+const withVersion = { ...getTableColumns(members), version: sql<string>`${members}.xmin::text` };
+
+/**
+ * The member a return link is made for or names, with the row's version, or undefined.
+ * Pass `albumId` to accept only a member of that album.
+ */
+export async function returnLinkTarget(memberId: string, albumId?: string): Promise<ReturnTarget | undefined> {
+	const [row] = await db
+		.select(withVersion)
+		.from(members)
+		.where(and(eq(members.id, memberId), albumId ? eq(members.albumId, albumId) : undefined))
+		.limit(1);
+	return row;
+}
+
 function secret(): string {
 	const value = process.env.AUTH_SECRET;
 	if (!value) throw new Error('AUTH_SECRET is required to issue return links');
 	return value;
 }
 
-const sign = (memberId: string, expires: number, deviceToken: string) =>
-	createHmac('sha256', secret()).update(`mira:return|${memberId}|${expires}|${deviceToken}`).digest('base64url');
+const sign = (member: Signed, expires: number) =>
+	createHmac('sha256', secret())
+		.update(`mira:return|${member.id}|${expires}|${member.deviceToken}|${member.version}`)
+		.digest('base64url');
 
 /** A link token for this guest, valid for `ttlMs` and until it is first used. */
-export function returnToken(member: Pick<Member, 'id' | 'deviceToken'>, ttlMs: number, now = Date.now()): string {
+export function returnToken(member: Signed, ttlMs: number, now = Date.now()): string {
 	const expires = now + ttlMs;
-	return `${member.id}.${expires.toString(36)}.${sign(member.id, expires, member.deviceToken)}`;
+	return `${member.id}.${expires.toString(36)}.${sign(member, expires)}`;
 }
 
 /** Whom a token names, without yet trusting it. */
@@ -46,12 +76,12 @@ export function tokenMemberId(token: string): string | null {
 }
 
 /** Is this token a current, unused return link for exactly this guest? */
-export function returnTokenValid(token: string, member: Pick<Member, 'id' | 'deviceToken'>, now = Date.now()): boolean {
+export function returnTokenValid(token: string, member: Signed, now = Date.now()): boolean {
 	const [memberId, expiresText, signature] = token.split('.');
 	const expires = Number.parseInt(expiresText ?? '', 36);
 	if (memberId !== member.id || !Number.isSafeInteger(expires) || expires <= now) return false;
 	const given = Buffer.from(signature ?? '');
-	const wanted = Buffer.from(sign(member.id, expires, member.deviceToken));
+	const wanted = Buffer.from(sign(member, expires));
 	return given.length === wanted.length && timingSafeEqual(given, wanted);
 }
 
@@ -70,7 +100,7 @@ export async function takePlace(token: string, memberId: string, deviceToken: st
 		// "No key update": nobody else may move or change these guests meanwhile, but a
 		// video of theirs that finishes being prepared this instant may still be recorded
 		// under them (its insert only needs the member to keep existing).
-		const [member] = await tx.select().from(members).where(eq(members.id, memberId)).for('no key update');
+		const [member] = await tx.select(withVersion).from(members).where(eq(members.id, memberId)).for('no key update');
 		if (!member || !canReturn(member) || !returnTokenValid(token, member)) return false;
 		if (member.deviceToken === deviceToken) return true; // already theirs
 		const [duplicate] = await tx

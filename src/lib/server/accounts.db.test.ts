@@ -2,9 +2,10 @@ import { afterAll, describe, expect, it } from 'vitest';
 import { and, eq } from 'drizzle-orm';
 import { db } from './db';
 import { albums, appSettings, members, moments, photos, uploadSessions, users } from './schema';
-import { authorizeSignIn, getSettings, hasAdministrator } from './users';
-import { admitWithinQuota, saveRegistration } from './admin';
+import { authorizeSignIn, getSettings, getUserByProvider, hasAdministrator } from './users';
+import { admitWithinQuota, assertAdminMutationAllowed, saveMaintenance, saveRegistration } from './admin';
 import { UPLOAD_TTL_MS } from './uploads';
+import { actions as adminActions } from '../../routes/admin/+page.server';
 
 // Database tests (npm run test:integration: a disposable database). Each test
 // uses unique ids and removes what it created.
@@ -46,6 +47,35 @@ describe('env-provisioned administrators', () => {
 		await authorizeSignIn({ provider, providerAccountId: 'c' });
 		expect((await row('c')).isAdmin).toBe(true);
 	});
+
+	it('the admin settings refuse to revoke an administrator the env names, and say why', async () => {
+		process.env.MIRA_ADMIN_IDENTITIES = `${provider}:named-admin`;
+		expect(await authorizeSignIn({ provider, providerAccountId: 'named-admin' })).toBe(true);
+		const actor = crypto.randomUUID();
+		await db.insert(users).values({ id: actor, provider, providerAccountId: 'acting-admin', isAdmin: true });
+		const named = (await row('named-admin')).id;
+		const revoke = () => {
+			const body = new URLSearchParams({ userId: named, isAdmin: '0' }).toString();
+			return adminActions.setAdmin({
+				request: new Request('http://localhost/admin?/setAdmin', {
+					method: 'POST',
+					headers: { 'content-type': 'application/x-www-form-urlencoded', 'content-length': String(body.length) },
+					body
+				}),
+				locals: { locale: 'en', auth: async () => ({ user: { id: actor } }) }
+			} as unknown as Parameters<typeof adminActions.setAdmin>[0]);
+		};
+		// Its next sign-in would make it an administrator again, so the change is refused.
+		expect(await revoke()).toMatchObject({
+			status: 409,
+			data: { error: expect.stringContaining('MIRA_ADMIN_IDENTITIES') }
+		});
+		expect(await row('named-admin')).toMatchObject({ isAdmin: true, adminFromEnv: true });
+		// Once the setting no longer names it, revoking it here is what lasts.
+		process.env.MIRA_ADMIN_IDENTITIES = '';
+		expect(await revoke()).toEqual({ ok: true });
+		expect(await row('named-admin')).toMatchObject({ isAdmin: false, adminFromEnv: false });
+	});
 });
 
 describe('who may register', () => {
@@ -66,6 +96,12 @@ describe('who may register', () => {
 		expect((await getSettings()).registrationMode).toBe('closed'); // created on first use
 		await saveRegistration('open', '');
 		expect((await getSettings()).registrationMode).toBe('open'); // a stored choice is never flipped
+	});
+
+	it('a settings row first made by saving another setting starts closed as well', async () => {
+		await db.delete(appSettings);
+		await saveMaintenance({ uploadsPaused: false, albumCreationPaused: false });
+		expect((await getSettings()).registrationMode).toBe('closed');
 	});
 
 	it('closed means only the named administrator gets in, once there is one', async () => {
@@ -103,6 +139,44 @@ describe('who may register', () => {
 			expect((await db.select().from(users).where(isPasswordAccount))[0]).toMatchObject({ isAdmin: true });
 			expect(await hasAdministrator()).toBe(false);
 			expect(await authorizeSignIn({ provider, providerAccountId: 'first-google-user' })).toBe(true);
+		} finally {
+			if (passwordBefore === undefined) delete process.env.MIRA_ADMIN_PASSWORD;
+			else process.env.MIRA_ADMIN_PASSWORD = passwordBefore;
+			await db.delete(users).where(isPasswordAccount);
+			for (const other of others) await db.update(users).set({ isAdmin: true }).where(eq(users.id, other.id));
+		}
+	});
+
+	it('a leftover password account does not cost the last real administrator their rights', async () => {
+		const passwordBefore = process.env.MIRA_ADMIN_PASSWORD;
+		const isPasswordAccount = and(eq(users.provider, 'password'), eq(users.providerAccountId, 'admin'));
+		// For this check nobody else in the database is an administrator.
+		const others = await db.select({ id: users.id }).from(users).where(eq(users.isAdmin, true));
+		for (const other of others) await db.update(users).set({ isAdmin: false }).where(eq(users.id, other.id));
+		try {
+			await saveRegistration('closed', '');
+			// 1. The copy starts with the administrator password, which makes its account.
+			process.env.MIRA_ADMIN_IDENTITIES = '';
+			process.env.MIRA_ADMIN_PASSWORD = 'a long test password';
+			expect(await authorizeSignIn({ provider: 'password', providerAccountId: 'admin' })).toBe(true);
+			// 2. The operator moves to a named account and removes the password.
+			delete process.env.MIRA_ADMIN_PASSWORD;
+			process.env.MIRA_ADMIN_IDENTITIES = `${provider}:operator`;
+			expect(await authorizeSignIn({ provider, providerAccountId: 'operator' })).toBe(true);
+			// 3. Later the setting goes too. The password row still says "administrator", but
+			// nobody can sign in to it, so the operator is the last administrator and stays one.
+			process.env.MIRA_ADMIN_IDENTITIES = '';
+			expect(await authorizeSignIn({ provider, providerAccountId: 'operator' })).toBe(true);
+			const operator = await getUserByProvider(provider, 'operator');
+			expect(operator).toMatchObject({ isAdmin: true });
+			expect((await db.select().from(users).where(isPasswordAccount))[0]).toMatchObject({ isAdmin: true });
+			// 4. So closed registration still holds, and somebody can still open /admin.
+			expect(await hasAdministrator()).toBe(true);
+			expect(await authorizeSignIn({ provider, providerAccountId: 'late-stranger' })).toBe(false);
+			// The admin settings' last-administrator check does not count the leftover row either.
+			await expect(
+				db.transaction((tx) => assertAdminMutationAllowed(tx, operator!.id, operator!.id, true))
+			).rejects.toMatchObject({ status: 409 });
 		} finally {
 			if (passwordBefore === undefined) delete process.env.MIRA_ADMIN_PASSWORD;
 			else process.env.MIRA_ADMIN_PASSWORD = passwordBefore;

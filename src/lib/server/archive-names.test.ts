@@ -61,4 +61,11 @@ describe('attachment', () => {
 			`attachment; filename="Cumplea_os _Ana_.jpg"; filename*=UTF-8''Cumplea%C3%B1os%20%22Ana%22.jpg`
 		);
 	});
+	it("encodes what RFC 8187 does not allow bare, so Firefox keeps the real name: ' ( ) *", () => {
+		expect(attachment("Ana's (2)*.jpg")).toBe(
+			`attachment; filename="Ana's (2)*.jpg"; filename*=UTF-8''Ana%27s%20%282%29%2A.jpg`
+		);
+		// "!" is one of RFC 8187's own characters and stays as it is.
+		expect(attachment('¡Hola!.jpg')).toMatch(/filename\*=UTF-8''%C2%A1Hola!\.jpg$/);
+	});
 });

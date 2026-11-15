@@ -5,51 +5,111 @@
 		<meta name="viewport" content="width=device-width, initial-scale=1" />
 		<meta
 			name="description"
-			content="Run your own Mira in a few minutes: one Compose file, five settings, and a password you choose. No building, no sign-in app to register."
+			content="Host Mira for your group: one Compose file, five settings, one command. A ready-made image, and a password you choose instead of a sign-in app to register."
 		/>
 		<meta name="theme-color" content="#f8f5ef" />
-		<title>Host your own Mira</title>
+		<title>Setup guide — Host your own Mira</title>
 		<link rel="icon" type="image/svg+xml" href="./assets/favicon.svg" />
 		<link rel="icon" type="image/png" href="./assets/mira.png" />
+		<link rel="preload" href="./assets/jakarta.woff2" as="font" type="font/woff2" crossorigin />
 		<link rel="stylesheet" href="./style.css" />
+		<link rel="stylesheet" href="./guide.css" />
 	</head>
-	<body>
+	<body class="guide">
 		<a class="skip" href="#main">Skip to content</a>
 		<header class="header wrap">
-			<a class="brand" href="./"><img src="./assets/mira-mark.svg" width="40" height="32" alt="" />Mira</a>
-			<nav aria-label="Main navigation"><a class="button small" href="./">Back to Mira</a></nav>
+			<a class="brand" href="./" aria-label="Mira home"
+				><img src="./assets/mira-mark.svg" width="40" height="32" alt="" />Mira</a
+			>
+			<nav aria-label="Main navigation">
+				<a href="./#story">How it works</a><a href="./#more">Compare</a
+				><a class="button small" href="./hosting.html" aria-current="page">Host your own</a>
+			</nav>
 		</header>
-		<main id="main" class="document wrap">
-			<p class="eyebrow">A HOME FOR YOUR SHARED MEMORIES</p>
-			<h1>Host your own <em>Mira.</em></h1>
-			<p class="lead">One file, five settings, one command.</p>
-			<p>
-				Mira is an open-source application you run yourself. Your copy stores the albums, account records and uploaded
-				media. This project website is a static introduction and does not accept uploads.
-			</p>
-			<h2>What you’ll need</h2>
-			<ul>
-				<li>A computer or server with Docker and Docker Compose. Nothing is built: Mira comes as a ready image.</li>
-				<li>
-					For other people to reach it: a domain name and an HTTPS reverse proxy (Caddy, Traefik, nginx or a tunnel)
-					pointing at Mira. To try it on the same computer first, you need neither.
-				</li>
-				<li>Disk space for the photos and videos, and a plan for backing them up.</li>
-			</ul>
-			<p>
-				You do not need to register an application with Google or GitHub. You sign in with a password you choose;
-				sign-in services can be added later for other people who should own albums.
-			</p>
-			<h2>1. Save the Compose file</h2>
-			<p>
-				Make an empty folder and save this as <code>compose.yaml</code> in it. It is the same file as
-				<a href="https://github.com/Humalio/mira/blob/main/deploy/compose.prod.yaml"
-					><code>deploy/compose.prod.yaml</code></a
-				>
-				in the repository and is attached to every
-				<a href="https://github.com/Humalio/mira/releases">release</a>.
-			</p>
-			<pre><code id="compose"># Mira, one server. Save this file as compose.yaml in an empty folder, put a .env file
+		<main id="main">
+			<section class="guide-hero wrap" aria-labelledby="guide-title">
+				<p class="eyebrow">SETUP GUIDE</p>
+				<h1 id="guide-title">Host Mira for your group.<br /><em>One file, five settings, one command.</em></h1>
+				<p class="lead">
+					Mira runs on a computer or server you look after. Your friends never see any of this: they just get a link.
+				</p>
+				<ul class="facts" aria-label="At a glance">
+					<li>Ready-made Docker image</li>
+					<li>Sign in with a password you choose</li>
+					<li>Photos stay on your own disk</li>
+					<li>Open source, MIT licence</li>
+				</ul>
+				<a class="button" href="#steps">Start the setup <span aria-hidden="true">&nbsp;↓</span></a>
+			</section>
+
+			<section class="needs wrap" aria-labelledby="needs-title">
+				<h2 id="needs-title">What you’ll need</h2>
+				<div class="need-grid">
+					<article class="need">
+						<span class="need-icon" aria-hidden="true"
+							><svg viewBox="0 0 24 24">
+								<rect x="3" y="4" width="18" height="7" rx="2" />
+								<rect x="3" y="13" width="18" height="7" rx="2" />
+								<path d="M7 7.5h.01M7 16.5h.01" /></svg
+						></span>
+						<h3>A machine with Docker</h3>
+						<p>Any computer or server with Docker and Docker Compose. Nothing to build: Mira comes as a ready image.</p>
+					</article>
+					<article class="need">
+						<span class="need-icon" aria-hidden="true"
+							><svg viewBox="0 0 24 24">
+								<circle cx="12" cy="12" r="9" />
+								<path
+									d="M3 12h18M12 3c2.5 2.6 3.8 5.6 3.8 9s-1.3 6.4-3.8 9c-2.5-2.6-3.8-5.6-3.8-9S9.5 5.6 12 3z"
+								/></svg
+						></span>
+						<h3>An address for your friends</h3>
+						<p>
+							A domain name and an HTTPS reverse proxy (Caddy, Traefik, nginx or a tunnel) pointing at Mira. Trying it
+							on your own computer first? Skip this.
+						</p>
+					</article>
+					<article class="need">
+						<span class="need-icon" aria-hidden="true"
+							><svg viewBox="0 0 24 24">
+								<path d="M4 7c0-1.7 3.6-3 8-3s8 1.3 8 3-3.6 3-8 3-8-1.3-8-3z" />
+								<path d="M4 7v10c0 1.7 3.6 3 8 3s8-1.3 8-3V7M4 12c0 1.7 3.6 3 8 3s8-1.3 8-3" /></svg
+						></span>
+						<h3>Room for the photos</h3>
+						<p>Disk space for photos and videos (original videos are large), and a plan for backing them up.</p>
+					</article>
+				</div>
+				<p class="needs-note">
+					No app to register with Google or GitHub: you sign in with a password you choose. Sign-in services can be
+					added later for friends who should create their own albums.
+				</p>
+			</section>
+
+			<section id="steps" class="steps-section" aria-labelledby="steps-title">
+				<div class="wrap">
+					<h2 id="steps-title">Three steps. <em>That’s the whole setup.</em></h2>
+
+					<ol class="setup">
+						<li class="setup-step">
+							<div class="setup-text">
+								<span class="setup-num">1</span>
+								<h3>Save the Compose file</h3>
+								<p>
+									Make an empty folder and save this as <code>compose.yaml</code> in it. It is the same file as
+									<a href="https://github.com/Humalio/mira/blob/main/deploy/compose.prod.yaml"
+										><code>deploy/compose.prod.yaml</code></a
+									>
+									in the repository and is attached to every
+									<a href="https://github.com/Humalio/mira/releases">release</a>.
+								</p>
+							</div>
+							<div class="code">
+								<div class="code-bar">
+									<span>compose.yaml</span><button type="button" class="copy" data-copy="compose" hidden>Copy</button>
+								</div>
+								<details class="code-fold">
+									<summary>Show the file <span>(about 60 lines)</span></summary>
+									<pre><code id="compose"># Mira, one server. Save this file as compose.yaml in an empty folder, put a .env file
 # beside it (see the hosting guide), then run:  docker compose up -d
 # From a clone of the repository instead:
 #   docker compose --env-file .env -f deploy/compose.prod.yaml up -d
@@ -113,9 +173,21 @@ services:
 volumes:
   mira_pgdata:
   mira_media:</code></pre>
-			<h2>2. Write five settings</h2>
-			<p>Save this beside it as <code>.env</code>, with your own values:</p>
-			<pre><code># The exact address people will type, scheme included.
+								</details>
+							</div>
+						</li>
+
+						<li class="setup-step">
+							<div class="setup-text">
+								<span class="setup-num">2</span>
+								<h3>Write five settings</h3>
+								<p>Save this beside it as <code>.env</code>, with your own values.</p>
+							</div>
+							<div class="code">
+								<div class="code-bar">
+									<span>.env</span><button type="button" class="copy" data-copy="env" hidden>Copy</button>
+								</div>
+								<pre><code id="env"># The exact address people will type, scheme included.
 ORIGIN=https://photos.example.org
 
 # Two long random values. Make each with:  openssl rand -hex 32
@@ -127,102 +199,139 @@ MIRA_ADMIN_PASSWORD=
 
 # Shown to guests, so they know whose server their photos go to. Optional.
 MIRA_OPERATOR_NAME=Ana Etxeberria</code></pre>
-			<table class="settings">
-				<thead>
-					<tr>
-						<th scope="col">Setting</th>
-						<th scope="col">What it is</th>
-					</tr>
-				</thead>
-				<tbody>
-					<tr>
-						<th scope="row"><code>ORIGIN</code></th>
-						<td>
+							</div>
+						</li>
+
+						<li class="setup-step">
+							<div class="setup-text">
+								<span class="setup-num">3</span>
+								<h3>Start it</h3>
+								<p>
+									The database is set up on the first start. Point your HTTPS proxy at <code>127.0.0.1:5180</code>, open
+									your address, and sign in with your password. Your proxy must also pass on each visitor’s address in
+									an <code>X-Forwarded-For</code> header. Caddy and Traefik send it by themselves; nginx needs one line,
+									shown in the deployment guide. Without it, Mira cannot tell your guests apart, and they all share one
+									set of request limits.
+								</p>
+							</div>
+							<div class="code">
+								<div class="code-bar">
+									<span>Terminal</span><button type="button" class="copy" data-copy="start" hidden>Copy</button>
+								</div>
+								<pre><code id="start">docker compose up -d</code></pre>
+							</div>
+						</li>
+					</ol>
+
+					<p class="callout">
+						<strong>Mira 0.1.0 is the first release</strong> and installs into a fresh database; there is no automatic
+						upgrade from earlier development builds. Until its image appears on the
+						<a href="https://github.com/Humalio/mira/releases">releases page</a>, build it from the source as the
+						<a href="https://github.com/Humalio/mira/blob/main/docs/DEPLOYMENT.md">deployment guide</a> describes. The
+						guide also covers proxies, backups, limits and updating.
+					</p>
+				</div>
+			</section>
+
+			<section class="settings-section wrap" aria-labelledby="settings-title">
+				<h2 id="settings-title">The settings, <em>in plain words</em></h2>
+				<dl class="setting-list">
+					<div class="setting">
+						<dt><code>ORIGIN</code></dt>
+						<dd>
 							The address in the browser’s address bar, exactly: <code>https://photos.example.org</code>, with no path
 							and no slash at the end. Joining and signing in from any other host name or port are refused, so a
 							mismatch here is the usual reason “nothing happens” when a form is sent. To try Mira on the same computer,
 							use <code>http://localhost:5180</code>.
-						</td>
-					</tr>
-					<tr>
-						<th scope="row"><code>PUBLIC_ORIGIN</code></th>
-						<td>
+						</dd>
+					</div>
+					<div class="setting">
+						<dt><code>MIRA_ADMIN_PASSWORD</code></dt>
+						<dd>
+							The password for the sign-in page. Whoever knows it is the administrator. After ten wrong tries the
+							password sign-in pauses for five minutes. Changing it signs that account out everywhere.
+						</dd>
+					</div>
+					<div class="setting">
+						<dt><code>PUBLIC_ORIGIN</code></dt>
+						<dd>
 							The address written into invitation links and QR codes. Leave it out and it is the same as
 							<code>ORIGIN</code>, which is right for almost everyone.
-						</td>
-					</tr>
-					<tr>
-						<th scope="row"><code>MIRA_IMAGE</code></th>
-						<td>
+						</dd>
+					</div>
+					<div class="setting">
+						<dt><code>MIRA_IMAGE</code></dt>
+						<dd>
 							Which release to run. Leave it out to run the version named in the Compose file, or pin another, such as
 							<code>ghcr.io/humalio/mira:0.1.0</code>, from the
 							<a href="https://github.com/Humalio/mira/releases">releases page</a>. There is no “latest” tag: you choose
 							when to update.
-						</td>
-					</tr>
-					<tr>
-						<th scope="row"><code>MIRA_PORT</code></th>
-						<td>
+						</dd>
+					</div>
+					<div class="setting">
+						<dt><code>MIRA_PORT</code></dt>
+						<dd>
 							The port Mira listens on, on this machine only (<code>127.0.0.1</code>). The default is
 							<code>5180</code>. Your HTTPS proxy forwards to it; it is deliberately not reachable from the network
 							directly.
-						</td>
-					</tr>
-					<tr>
-						<th scope="row"><code>MIRA_ADMIN_PASSWORD</code></th>
-						<td>
-							The password for the sign-in page. Whoever knows it is the administrator. After ten wrong tries the
-							password sign-in pauses for five minutes. Changing it signs that account out everywhere.
-						</td>
-					</tr>
-				</tbody>
-			</table>
-			<h2>3. Start it</h2>
-			<pre><code>docker compose up -d</code></pre>
-			<p>
-				The database is set up on the first start. Point your HTTPS proxy at <code>127.0.0.1:5180</code>, open your
-				address, and sign in with your password.
-			</p>
-			<p class="callout">
-				Mira 0.1.0 is the first release and installs into a fresh database; there is no automatic upgrade from earlier
-				development builds. Until its image appears on the
-				<a href="https://github.com/Humalio/mira/releases">releases page</a>, build it from the source as the deployment
-				guide describes. Read the
-				<a href="https://github.com/Humalio/mira/blob/main/docs/DEPLOYMENT.md">deployment guide</a>
-				for proxies, backups, limits and updating.
-			</p>
-			<h2>Make the first album</h2>
-			<p>
-				Create an album and share its invitation link or QR code with your group; there is a printable QR card for the
-				table. Guests join in their browser by typing a name. Nobody but you can create albums until you say so: a new
-				copy of Mira starts with registration closed.
-			</p>
-			<p>
-				Invitation links can be forwarded, and anyone who has one can join that album. You can review uploads before the
-				group sees them, close an album when the event is over, and replace a link that has travelled too far.
-			</p>
-			<h2>Letting other people own albums</h2>
-			<p>
-				The password is one account: yours. For friends who should create their own albums, add a sign-in service.
-				Register Mira with Google or GitHub (the callback address is
-				<code>https://your-domain/auth/callback/google</code> or <code>.../github</code>), put the two values in
-				<code>.env</code>, and choose who may register under Admin, Settings:
-			</p>
-			<pre><code>AUTH_GOOGLE_ID=your-client-id
+						</dd>
+					</div>
+				</dl>
+			</section>
+
+			<section class="after-section" aria-labelledby="after-title">
+				<div class="wrap">
+					<h2 id="after-title">Once it’s running</h2>
+					<div class="after-grid">
+						<article class="after-card">
+							<h3>Make the first album</h3>
+							<p>
+								Create an album and share its link or QR code with your group; there is a printable QR card for the
+								table. Guests join in their browser by typing a name.
+							</p>
+							<p>
+								Nobody but you can create albums until you say so: a new copy of Mira starts with registration closed.
+							</p>
+						</article>
+						<article class="after-card">
+							<h3>Stay in charge of who’s in</h3>
+							<p>
+								Invitation links can be forwarded, and anyone who has one can join that album. You can review uploads
+								before the group sees them, close an album when the event is over, and replace a link that has travelled
+								too far.
+							</p>
+						</article>
+						<article class="after-card">
+							<h3>Let friends own albums</h3>
+							<p>
+								The password is one account: yours. For friends who should create their own albums, register Mira with
+								Google or GitHub (the callback address is <code>https://your-domain/auth/callback/google</code> or
+								<code>.../github</code>), put the two values in <code>.env</code>, and choose who may register under
+								Admin, Settings.
+							</p>
+							<pre><code>AUTH_GOOGLE_ID=your-client-id
 AUTH_GOOGLE_SECRET=your-client-secret</code></pre>
-			<h2>Keep it cared for</h2>
-			<p>
-				Back up both the database and the media volume, together. Keep your server and Mira up to date, watch the free
-				disk space (original videos are large), and set upload and storage limits in the admin settings. Self-hosting
-				gives you control over the home for your albums; it also makes you responsible for keeping that home running and
-				for the photos people put in it.
-			</p>
-			<p><a href="./">Return to the Mira overview</a></p>
+						</article>
+						<article class="after-card">
+							<h3>Keep it cared for</h3>
+							<p>
+								Back up the database and the media volume, together. Keep your server and Mira up to date, watch the
+								free disk space, and set upload and storage limits in the admin settings.
+							</p>
+							<p>
+								Self-hosting gives you control over the home for your albums. It also makes you responsible for keeping
+								it running, and for the photos people put in it.
+							</p>
+						</article>
+					</div>
+				</div>
+			</section>
 		</main>
 		<footer class="footer wrap">
-			<a class="brand" href="./">Mira</a>
+			<a class="brand" href="./"><img src="./assets/mira-mark.svg" width="35" height="28" alt="" />Mira</a>
 			<p>Everyone’s photos. One shared album. <span class="endorsement">A Humalio project</span></p>
 			<div><a href="./credits.html">Credits &amp; license</a></div>
 		</footer>
+		<script src="./guide.js"></script>
 	</body>
 </html>

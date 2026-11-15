@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { enhance } from '$app/forms';
+	import type { ActionResult } from '$app/forms';
 	import { ChevronDown, ChevronUp, Images, LogOut, Plus, Settings, Shield } from '@lucide/svelte';
 	import AlbumOptions from '#lib/components/AlbumOptions.svelte';
 	import Brand from '#lib/components/Brand.svelte';
@@ -10,8 +11,18 @@
 	import { translator } from '#lib/i18n/index.js';
 	import { DEFAULT_VIDEO_QUALITY, type VideoQuality } from '#lib/video-quality.js';
 
-	let { data, form } = $props();
+	let { data } = $props();
 	const t = $derived(translator(data.locale));
+
+	// Each sheet shows the error its own form came back with. The page's `form` is shared by
+	// every action, so a failed edit's message used to turn up in the next create sheet, and
+	// the edit sheet never showed one at all.
+	let createError = $state('');
+	let editError = $state('');
+	function failure(result: ActionResult): string {
+		const error: unknown = result.type === 'failure' ? result.data?.error : undefined;
+		return typeof error === 'string' ? error : '';
+	}
 
 	let createOpen = $state(false);
 	// Open by default: a new owner should see what will happen to the group's videos
@@ -41,7 +52,12 @@
 		editKeepOnlyCopy = album.keepOnlyCopy;
 		editLocked = album.locked;
 		confirmDelete = false;
+		editError = '';
 		editOpen = true;
+	}
+	function openCreate() {
+		createError = '';
+		createOpen = true;
 	}
 </script>
 
@@ -160,7 +176,7 @@
 
 	{#if data.canCreate}
 		<div class="bar">
-			<button class="share" onclick={() => (createOpen = true)}><Plus size={20} /> {t('home.newAlbum')}</button>
+			<button class="share" onclick={openCreate}><Plus size={20} /> {t('home.newAlbum')}</button>
 		</div>
 	{:else if data.createBlockedReason}
 		<div class="bar"><div class="pausednote">{data.createBlockedReason}</div></div>
@@ -170,7 +186,17 @@
 {#if createOpen}
 	<Sheet title={t('create.sheetTitle')} autofocus onclose={() => (createOpen = false)}>
 		<p class="hint">{t('create.hint')}</p>
-		<form method="POST" action="?/create" use:enhance>
+		<form
+			method="POST"
+			action="?/create"
+			use:enhance={() => {
+				createError = '';
+				return async ({ update, result }) => {
+					await update();
+					createError = failure(result);
+				};
+			}}
+		>
 			<label class="field" for="an">{t('create.albumName')}</label>
 			<input id="an" type="text" name="albumName" maxlength="120" placeholder={t('create.albumPlaceholder')} required />
 
@@ -190,7 +216,7 @@
 			<input type="hidden" name="videoQuality" value={createQuality} />
 			<input type="hidden" name="keepOnlyCopy" value={createKeepOnlyCopy ? '1' : '0'} />
 
-			{#if form?.error}<p class="err">{form.error}</p>{/if}
+			{#if createError}<p class="err" role="alert">{createError}</p>{/if}
 			<button class="primary" type="submit">{t('create.submit')}</button>
 		</form>
 		<button class="ghost" onclick={() => (createOpen = false)}>{t('common.cancel')}</button>
@@ -202,11 +228,14 @@
 		<form
 			method="POST"
 			action="?/update"
-			use:enhance={() =>
-				async ({ update, result }) => {
+			use:enhance={() => {
+				editError = '';
+				return async ({ update, result }) => {
 					await update({ reset: false });
 					if (result.type === 'success') editOpen = false;
-				}}
+					editError = failure(result);
+				};
+			}}
 		>
 			<label class="field" for="ename">{t('create.albumName')}</label>
 			<input id="ename" type="text" name="name" maxlength="120" bind:value={editName} required />
@@ -223,6 +252,7 @@
 			<input type="hidden" name="videoQuality" value={editQuality} />
 			<input type="hidden" name="keepOnlyCopy" value={editKeepOnlyCopy ? '1' : '0'} />
 			<input type="hidden" name="locked" value={editLocked ? '1' : '0'} />
+			{#if editError}<p class="err" role="alert">{editError}</p>{/if}
 			<button class="primary" type="submit">{t('edit.save')}</button>
 		</form>
 
@@ -258,7 +288,7 @@
 
 <style>
 	/* Delete lives below the save action and asks twice. #b3261e matches the admin
-	   take-down affordance — the palette has no danger token. */
+	   take-down affordance; text uses --danger-text, which stays readable on dark skins. */
 	.danger {
 		margin-top: 18px;
 		padding-top: 16px;
@@ -269,7 +299,7 @@
 		padding: 13px;
 		border-radius: 14px;
 		background: transparent;
-		color: #b3261e;
+		color: var(--danger-text);
 	}
 	.danger-ask {
 		display: block;

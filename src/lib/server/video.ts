@@ -9,6 +9,7 @@
  * then makes no copy.
  * Used by the finaliser in video-finalize.ts.
  */
+import { isHttpError } from '@sveltejs/kit';
 import { execFile, spawn } from 'node:child_process';
 import { readFile, rm, stat } from 'node:fs/promises';
 import { createConcurrencyGate } from './concurrency';
@@ -18,7 +19,9 @@ import type { VideoQuality } from '#lib/video-quality.js';
 // One encode at a time keeps a small server responsive. A second video WAITS for the
 // slot: compression is the reason people upload videos here, so "busy" must never
 // mean "silently keep the 1 GB original". The finaliser renews the upload session's
-// lease while it waits and encodes (see video/complete), so waiting is safe.
+// lease while it waits and encodes (see video/complete), so waiting is safe. Should
+// the queue still be full or the wait run out, `makePlaybackCopy` hands the 503 back
+// and the finaliser puts the upload back in its queue to be tried again later.
 const acquireTranscodeSlot = createConcurrencyGate(1, 'The video encoder is busy', {
 	maxWaiting: 8,
 	maxWaitMs: 2 * 60 * 60_000
@@ -324,7 +327,8 @@ export type PlaybackCopy = { key: string; size: number };
  * quality, written beside the original, which is never touched here. Returns null,
  * leaving no copy behind, when ffmpeg is missing or fails, or when the copy would not
  * be smaller (common for "lossless", since a phone's own file is already well
- * compressed); the original then simply plays as it is.
+ * compressed); the original then simply plays as it is. Throws the encoder's 503 when
+ * it stayed busy: that is a reason to try again later, never to go without a copy.
  */
 export async function makePlaybackCopy(
 	albumSlug: string,
@@ -343,11 +347,15 @@ export async function makePlaybackCopy(
 		if (optSize > 0 && optSize < size) return { key, size: optSize };
 		await rm(optAbs, { force: true });
 	} catch (cause) {
-		// ffmpeg missing, queue full, timed out or failed: the original is all there is,
-		// but leave a trace: "copies silently stopped being made" is otherwise invisible.
+		await rm(optAbs, { force: true }).catch(() => {});
+		// The encoder queue was full or the wait for it ran out. Busy must never mean "keep
+		// it without a copy" (see acquireTranscodeSlot): the finaliser keeps every chunk and
+		// tries the whole video again later.
+		if (isHttpError(cause) && cause.status === 503) throw cause;
+		// ffmpeg missing, timed out or failed: the original is all there is, but leave a
+		// trace: "copies silently stopped being made" is otherwise invisible.
 		const code = (cause as NodeJS.ErrnoException)?.code;
 		if (code !== 'ENOENT') console.warn('[video] playback copy skipped', { mediaItemId, cause: String(cause) });
-		await rm(optAbs, { force: true }).catch(() => {});
 	}
 	return null;
 }

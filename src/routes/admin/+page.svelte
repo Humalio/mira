@@ -298,6 +298,7 @@
 		<form method="POST" action="?/registration" use:enhance={keep('reg')} class="card">
 			<Segmented
 				bind:value={regMode}
+				label={t('admin.reg.title')}
 				options={[
 					{ value: 'open', label: t('admin.reg.open') },
 					{ value: 'closed', label: t('admin.reg.closed') },
@@ -342,13 +343,13 @@
 				<div class="rowmeta">
 					<b>{t('admin.maint.pauseUploads')}</b><small>{t('admin.maint.pauseUploadsSub')}</small>
 				</div>
-				<Switch bind:checked={uploadsPaused} />
+				<Switch bind:checked={uploadsPaused} label={t('admin.maint.pauseUploads')} />
 			</div>
 			<div class="switchrow">
 				<div class="rowmeta">
 					<b>{t('admin.maint.pauseAlbums')}</b><small>{t('admin.maint.pauseAlbumsSub')}</small>
 				</div>
-				<Switch bind:checked={albumCreationPaused} />
+				<Switch bind:checked={albumCreationPaused} label={t('admin.maint.pauseAlbums')} />
 			</div>
 			<input type="hidden" name="uploadsPaused" value={uploadsPaused ? '1' : '0'} />
 			<input type="hidden" name="albumCreationPaused" value={albumCreationPaused ? '1' : '0'} />
@@ -558,7 +559,7 @@
 		background: var(--surface-2);
 	}
 	.iconbtn.danger {
-		color: #b3261e;
+		color: var(--danger-text);
 	}
 	.row {
 		display: flex;
@@ -601,13 +602,15 @@
 		background: var(--surface-2);
 		color: var(--muted);
 	}
+	/* A tint, not a fill, so the text is the readable accent, not the ink meant for a full
+	   accent fill (plum on the dark theme's tint was about 1.6:1). */
 	.tag.admin {
 		background: color-mix(in srgb, var(--accent) 22%, transparent);
-		color: var(--accent-ink);
+		color: var(--accent-text);
 	}
 	.tag.blk {
 		background: rgba(179, 38, 30, 0.12);
-		color: #b3261e;
+		color: var(--danger-text);
 	}
 	.actions {
 		display: flex;
@@ -675,8 +678,8 @@
 		color: var(--muted);
 	}
 	.pill.warn {
-		color: #b3261e;
-		border-color: color-mix(in srgb, #b3261e 35%, var(--line));
+		color: var(--danger-text);
+		border-color: color-mix(in srgb, var(--danger-text) 35%, var(--line));
 	}
 	.primary.danger {
 		background: #b3261e;

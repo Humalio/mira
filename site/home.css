@@ -1,0 +1,958 @@
+/* Home page only. Shared tokens, fonts, header, buttons and footer live in style.css. */
+
+/* ---- headings: Plus Jakarta Sans, heavy and tight ---- */
+.home main h1,
+.home main h2,
+.home main h3 {
+	font-family: var(--sans);
+}
+.home main h1 {
+	font-weight: 750;
+	letter-spacing: -0.045em;
+	line-height: 1.04;
+}
+.home main h2 {
+	font-weight: 750;
+	letter-spacing: -0.04em;
+	line-height: 1.08;
+}
+.home main h3 {
+	font-weight: 700;
+	letter-spacing: -0.025em;
+}
+.home main h1 em,
+.home main h2 em {
+	font-style: normal;
+	font-weight: inherit;
+}
+
+/* =========================================================================
+   Hero: the moment, then everyone's photos arriving in one album
+   ========================================================================= */
+.hero2 {
+	display: grid;
+	grid-template-columns: minmax(0, 1fr) 600px;
+	grid-template-areas:
+		'head visual'
+		'body visual';
+	column-gap: 56px;
+	padding-block: 64px 60px;
+}
+.hero-head {
+	grid-area: head;
+	align-self: end;
+}
+.hero-visual {
+	grid-area: visual;
+	align-self: center;
+}
+.hero-body {
+	grid-area: body;
+	align-self: start;
+}
+.hero2 h1 {
+	font-size: clamp(44px, 4.4vw, 62px);
+	margin-bottom: 26px;
+	text-wrap: balance;
+}
+.hero2 .lead {
+	max-width: 470px;
+	margin-bottom: 30px;
+}
+
+/* the picture is drawn at a fixed size and scaled down to fit its column here, in CSS, so it
+   fits before any script or web font has loaded: 100cqi is the column's width, and
+   tan(atan2(a, b)) is how CSS divides one length by another (home.js covers older browsers) */
+.hero-visual {
+	--w: 600px;
+	--h: 470px;
+	min-width: 0;
+	container-type: inline-size;
+}
+.stage {
+	--s: min(1, tan(atan2(100cqi, var(--w))));
+	position: relative;
+	width: var(--w);
+	height: var(--h);
+	/* centred in a wider column; scaling leaves the box at full size, so the bottom margin
+	   takes back the height the picture no longer uses */
+	margin: 0 auto calc(var(--h) * (var(--s) - 1));
+	transform: scale(var(--s));
+	transform-origin: top left;
+}
+.phone {
+	position: absolute;
+	left: 168px;
+	top: 0;
+	width: 264px;
+	padding: 16px 14px 14px;
+	background: var(--paper);
+	border: 1px solid var(--line);
+	border-radius: 30px;
+	box-shadow:
+		0 30px 60px #38243d26,
+		0 0 0 7px var(--white),
+		0 0 0 8px var(--line);
+}
+.album-head {
+	display: flex;
+	justify-content: space-between;
+	align-items: center;
+}
+.album-title {
+	font: 600 19px/1.2 var(--serif);
+	letter-spacing: -0.02em;
+}
+.dots {
+	font-size: 9px;
+	letter-spacing: 1px;
+}
+.count-chip {
+	display: inline-block;
+	margin: 9px 0 12px;
+	padding: 4px 11px;
+	font-size: 11.5px;
+	font-weight: 600;
+	color: var(--plum);
+	background: var(--gold);
+	border-radius: 9px;
+}
+.count-chip b {
+	font-weight: 500;
+	color: #6d5a52;
+	margin-left: 3px;
+}
+.grid {
+	display: grid;
+	grid-template-columns: repeat(3, 1fr);
+	gap: 6px;
+	margin-inline: -14px;
+	padding: 12px 14px 0;
+	border-top: 1px solid var(--line);
+}
+.tile {
+	position: relative;
+	margin: 0;
+	aspect-ratio: 1;
+	border-radius: 11px;
+	background: var(--wash);
+	will-change: transform;
+}
+.tile img {
+	width: 100%;
+	height: 100%;
+	object-fit: cover;
+	border-radius: inherit;
+}
+.who {
+	position: absolute;
+	left: 5px;
+	bottom: 5px;
+	padding: 1px 7px;
+	font-size: 9.5px;
+	font-weight: 600;
+	line-height: 1.6;
+	color: #fff;
+	background: #1e1821a6;
+	border-radius: 20px;
+}
+.heart {
+	position: absolute;
+	top: 5px;
+	right: 5px;
+	width: 19px;
+	height: 17px;
+	border-radius: 6px;
+	background: #1e182166
+		url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='white' stroke-width='2.4'%3E%3Cpath d='M12 20s-7-4.4-7-10a4 4 0 0 1 7-2.6A4 4 0 0 1 19 10c0 5.6-7 10-7 10z'/%3E%3C/svg%3E")
+		center / 11px no-repeat;
+}
+.heart.on {
+	background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='%23f3b99c' stroke='%23f3b99c' stroke-width='2.4'%3E%3Cpath d='M12 20s-7-4.4-7-10a4 4 0 0 1 7-2.6A4 4 0 0 1 19 10c0 5.6-7 10-7 10z'/%3E%3C/svg%3E");
+}
+.tile.pending {
+	display: flex;
+	flex-direction: column;
+	align-items: center;
+	justify-content: center;
+	gap: 5px;
+	padding: 6px;
+	text-align: center;
+	font-size: 8.5px;
+	line-height: 1.3;
+	color: var(--muted);
+	border: 1px dashed #c9bccd;
+	background: var(--white);
+}
+.spin {
+	width: 15px;
+	height: 15px;
+	border: 2px solid var(--wash);
+	border-top-color: var(--grape);
+	border-radius: 50%;
+	animation: spin 0.9s linear infinite;
+}
+@keyframes spin {
+	to {
+		transform: rotate(360deg);
+	}
+}
+.bar {
+	display: flex;
+	gap: 6px;
+	margin-top: 64px;
+}
+.share {
+	flex: 1;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	height: 40px;
+	border-radius: 12px;
+	background: var(--gold);
+	color: var(--plum);
+	font-size: 13px;
+	font-weight: 700;
+}
+.tool {
+	width: 50px;
+	height: 40px;
+	display: flex;
+	flex-direction: column;
+	align-items: center;
+	justify-content: center;
+	font-size: 7.5px;
+	border-radius: 12px;
+	background: var(--white);
+	border: 1px solid var(--line);
+}
+.tool svg {
+	width: 14px;
+	height: 14px;
+	fill: none;
+	stroke: var(--ink);
+	stroke-width: 2;
+	stroke-linecap: round;
+}
+/* the four guests, each on their own phone */
+.sender {
+	position: absolute;
+	z-index: 2;
+	display: flex;
+	align-items: center;
+	gap: 9px;
+	min-width: 140px;
+	padding: 8px 14px 8px 8px;
+	background: var(--white);
+	border: 1px solid var(--line);
+	border-radius: 16px;
+	box-shadow: 0 12px 30px #38243d1f;
+}
+.sender[data-who='alex'] {
+	left: 0;
+	top: 62px;
+}
+.sender[data-who='marta'] {
+	right: 0;
+	top: 128px;
+}
+.sender[data-who='tomas'] {
+	left: 0;
+	top: 262px;
+}
+.sender[data-who='ines'] {
+	right: 0;
+	top: 330px;
+}
+.avatar {
+	flex: none;
+	display: grid;
+	place-items: center;
+	width: 32px;
+	height: 32px;
+	border-radius: 50%;
+	font: 600 15px/1 var(--serif);
+}
+[data-who='alex'] .avatar {
+	background: var(--apricot);
+	color: var(--plum);
+}
+[data-who='marta'] .avatar {
+	background: var(--wash);
+	color: var(--grape);
+}
+[data-who='tomas'] .avatar {
+	background: var(--gold);
+	color: var(--plum);
+}
+[data-who='ines'] .avatar {
+	background: var(--grape);
+	color: var(--white);
+}
+.meta {
+	display: flex;
+	flex-direction: column;
+	line-height: 1.3;
+}
+.meta b {
+	font-size: 13px;
+}
+.meta small {
+	font-size: 11px;
+	color: var(--muted);
+	white-space: nowrap;
+}
+.sender.done small {
+	color: var(--grape);
+	font-weight: 600;
+}
+.sender.done:not([data-who='ines']) small::before {
+	content: '✓ ';
+}
+.sender.ping {
+	animation: ping 0.5s ease-out;
+}
+@keyframes ping {
+	40% {
+		transform: scale(1.07);
+	}
+}
+
+@media (max-width: 1100px) {
+	.hero2 {
+		grid-template-columns: minmax(0, 1fr) 460px;
+		column-gap: 40px;
+	}
+}
+/* tablets and phones: headline, then the picture, then the words */
+@media (max-width: 900px) {
+	.hero2 {
+		grid-template-columns: 1fr;
+		grid-template-areas:
+			'head'
+			'visual'
+			'body';
+		padding-block: 36px 48px;
+	}
+	.hero2 h1 {
+		font-size: clamp(34px, 6.4vw, 52px);
+		margin-bottom: 18px;
+	}
+	.hero-visual {
+		margin-bottom: 28px;
+	}
+	.hero2 .lead {
+		max-width: 560px;
+	}
+}
+@media (max-width: 760px) {
+	.hero2 {
+		padding-block: 30px 44px;
+	}
+	.hero2 .eyebrow {
+		font-size: 11px;
+		margin-bottom: 12px;
+	}
+	.hero2 .lead {
+		font-size: 17px;
+		margin-bottom: 22px;
+	}
+	/* a narrower picture with compact name tags, so names stay readable */
+	.hero-visual {
+		--w: 460px;
+		--h: 432px;
+		margin-bottom: 24px;
+	}
+	.phone {
+		left: 98px;
+	}
+	.bar {
+		margin-top: 26px;
+	}
+	.who {
+		font-size: 11.5px;
+	}
+	.sender {
+		min-width: 0;
+		gap: 7px;
+		padding: 6px 13px 6px 6px;
+	}
+	.sender small {
+		display: none;
+	}
+	.meta b {
+		font-size: 15px;
+	}
+}
+
+/* =========================================================================
+   How it works: the phone stays, the four steps scroll past it
+   ========================================================================= */
+.story2 {
+	background: var(--white);
+	border-top: 1px solid var(--line);
+}
+.story-grid {
+	display: grid;
+	grid-template-columns: minmax(0, 1fr) 360px;
+	gap: 80px;
+}
+.story-head {
+	padding-top: 72px;
+}
+.story-head h2 {
+	margin-bottom: 0;
+}
+.sstep {
+	display: flex;
+	flex-direction: column;
+	justify-content: center;
+	min-height: clamp(260px, 40vh, 400px);
+	max-width: 460px;
+}
+.sstep:last-child {
+	padding-bottom: 72px;
+}
+.flow-title {
+	display: flex;
+	align-items: center;
+	gap: 10px;
+	margin: 0 0 10px;
+}
+.flow-num {
+	flex: none;
+	display: inline-grid;
+	place-items: center;
+	width: 32px;
+	height: 32px;
+	border-radius: 50%;
+	background: var(--plum);
+	color: var(--white);
+	font: 750 14px/1 var(--sans);
+}
+.sstep h3 {
+	margin: 0;
+	font-size: clamp(24px, 2.4vw, 32px);
+}
+.sstep p {
+	margin: 0;
+	font-size: 17px;
+	line-height: 1.6;
+	color: var(--muted);
+}
+/* home.js sets --focus from 1, for the step beside the phone, to 0 for steps away from it.
+   They recede by colour rather than by fading, down to the muted text colour at most, so
+   every step stays readable (at least 4.5:1, white numbers included) */
+@supports (color: color-mix(in srgb, red 50%, blue)) {
+	.sstep h3 {
+		color: color-mix(in srgb, var(--ink) calc(var(--focus, 1) * 100%), var(--muted));
+	}
+	.sstep .flow-num {
+		background: color-mix(in srgb, var(--plum) calc(var(--focus, 1) * 100%), var(--muted));
+	}
+}
+.story-phone {
+	position: relative;
+}
+.sphone {
+	position: sticky;
+	top: calc(50vh - 290px);
+	width: 300px;
+	height: 580px;
+	margin: 72px auto;
+	overflow: hidden;
+	background: var(--paper);
+	border: 1px solid var(--line);
+	border-radius: 42px;
+	box-shadow:
+		0 40px 80px #38243d26,
+		0 0 0 9px var(--white),
+		0 0 0 10px var(--line);
+}
+/* each screen fills the phone; home.js crossfades between them as you scroll */
+.scene {
+	position: absolute;
+	inset: 0;
+	padding: 26px 20px;
+	background: var(--paper);
+	opacity: 0;
+	visibility: hidden;
+	will-change: opacity, transform;
+}
+.scene.on {
+	opacity: 1;
+	visibility: visible;
+}
+/* 1: the link in the group chat */
+.scene-chat {
+	background: #efe9e1;
+}
+.chat-top {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	margin: -26px -20px 18px;
+	padding: 22px 18px 12px;
+	background: var(--white);
+	border-bottom: 1px solid var(--line);
+	font-size: 13px;
+}
+.chat-av {
+	display: grid;
+	place-items: center;
+	width: 26px;
+	height: 26px;
+	border-radius: 50%;
+	background: var(--apricot);
+	color: var(--plum);
+	font: 700 12px var(--sans);
+}
+.bubble {
+	max-width: 85%;
+	margin: 0 0 8px;
+	padding: 8px 11px;
+	font-size: 14px;
+	line-height: 1.4;
+	background: var(--white);
+	border-radius: 4px 14px 14px 14px;
+	box-shadow: 0 1px 1px #0000000d;
+}
+.link-card {
+	display: grid;
+	gap: 2px;
+	width: 78%;
+	padding: 6px 6px 9px;
+}
+.link-card img {
+	width: 100%;
+	height: 120px;
+	margin-bottom: 5px;
+	object-fit: cover;
+	border-radius: 9px;
+}
+.link-card b {
+	padding-inline: 4px;
+	font-size: 13px;
+}
+.link-card small {
+	padding-inline: 4px;
+	font-size: 11px;
+	color: var(--muted);
+}
+.tap {
+	position: absolute;
+	left: 52%;
+	top: 250px;
+	width: 34px;
+	height: 34px;
+	border-radius: 50%;
+	background: #694b7533;
+	box-shadow: 0 0 0 8px #694b7514;
+}
+/* 2: join with a name */
+.scene-join {
+	display: flex;
+	flex-direction: column;
+	justify-content: center;
+	gap: 6px;
+	padding: 30px 24px;
+}
+.join-title {
+	margin: 0 0 12px;
+	font: 750 23px/1.2 var(--sans);
+	letter-spacing: -0.03em;
+}
+.join-label {
+	font-size: 12px;
+	font-weight: 600;
+	color: var(--muted);
+}
+.field {
+	display: flex;
+	align-items: center;
+	height: 44px;
+	padding: 0 14px;
+	background: var(--white);
+	border: 2px solid var(--grape);
+	border-radius: 12px;
+	font-size: 15px;
+	font-weight: 600;
+}
+.caret {
+	width: 2px;
+	height: 18px;
+	margin-left: 2px;
+	background: var(--grape);
+	animation: blink 1s steps(1) infinite;
+}
+@keyframes blink {
+	50% {
+		opacity: 0;
+	}
+}
+.join-btn {
+	display: grid;
+	place-items: center;
+	height: 44px;
+	margin-top: 10px;
+	border-radius: 12px;
+	background: var(--gold);
+	color: var(--plum);
+	font-size: 14px;
+	font-weight: 700;
+}
+/* 3: everyone's photos */
+.mini-grid {
+	display: grid;
+	grid-template-columns: repeat(3, 1fr);
+	gap: 7px;
+}
+.mini-grid span {
+	position: relative;
+	aspect-ratio: 1;
+}
+.mini-grid img {
+	width: 100%;
+	height: 100%;
+	object-fit: cover;
+	border-radius: 10px;
+}
+.mini-grid i {
+	position: absolute;
+	left: 4px;
+	bottom: 4px;
+	padding: 0 6px;
+	font: normal 600 11px/1.6 var(--sans);
+	color: #fff;
+	background: #1e1821a6;
+	border-radius: 20px;
+}
+.mini-grid .mine img {
+	outline: 2.5px solid var(--apricot);
+	outline-offset: 1px;
+}
+.toast {
+	position: absolute;
+	left: 50%;
+	bottom: 28px;
+	transform: translateX(-50%);
+	padding: 8px 16px;
+	white-space: nowrap;
+	font-size: 12.5px;
+	font-weight: 700;
+	color: var(--white);
+	background: var(--plum);
+	border-radius: 20px;
+	box-shadow: 0 8px 20px #38243d33;
+}
+/* 4: favourites and download */
+.scene-download {
+	padding: 0;
+}
+.dl-photo {
+	position: relative;
+	height: 330px;
+}
+.dl-photo img {
+	width: 100%;
+	height: 100%;
+	object-fit: cover;
+}
+.heart.big {
+	top: 16px;
+	right: 16px;
+	width: 38px;
+	height: 34px;
+	border-radius: 11px;
+	background-size: 20px;
+}
+.sheet {
+	position: absolute;
+	left: 0;
+	right: 0;
+	bottom: 0;
+	display: grid;
+	gap: 7px;
+	padding: 18px 16px 22px;
+	background: var(--white);
+	border-radius: 24px 24px 0 0;
+	box-shadow: 0 -10px 30px #38243d1f;
+}
+.sheet b {
+	margin-bottom: 2px;
+	font-size: 16px;
+}
+.sheet .opt {
+	display: flex;
+	justify-content: space-between;
+	align-items: baseline;
+	padding: 11px 14px;
+	background: var(--wash);
+	border-radius: 12px;
+}
+.sheet .opt.picked {
+	outline: 2px solid var(--grape);
+}
+.sheet em {
+	font-style: normal;
+	font-weight: 600;
+	font-size: 14px;
+}
+.sheet small {
+	font-size: 12px;
+	color: var(--muted);
+}
+
+/* tablets: side by side with a slimmer gap */
+@media (max-width: 900px) {
+	.story-grid {
+		grid-template-columns: minmax(0, 1fr) 300px;
+		gap: 40px;
+	}
+	.story-head {
+		padding-top: 64px;
+	}
+	.sphone {
+		margin-block: 64px;
+	}
+}
+/* phones: the phone sits at the top of the screen and the steps scroll under it */
+@media (max-width: 700px) {
+	.story-grid {
+		grid-template-columns: 1fr;
+		gap: 0;
+	}
+	.story-phone {
+		grid-row: 1;
+		position: sticky;
+		top: 0;
+		z-index: 2;
+		height: 0;
+	}
+	/* a soft backdrop so step text scrolls away under the phone */
+	.story-phone::before {
+		content: '';
+		position: absolute;
+		left: -20px;
+		right: -20px;
+		top: 0;
+		height: 340px;
+		background: linear-gradient(var(--white) 88%, #fffefb00);
+	}
+	.sphone {
+		position: relative;
+		top: 12px;
+		margin: 0 auto;
+		zoom: 0.52;
+	}
+	.story-head {
+		display: none;
+	}
+	.story-steps {
+		padding-top: 330px;
+	}
+	.sstep {
+		justify-content: flex-start;
+		min-height: 300px;
+		max-width: none;
+		padding-top: 40px;
+		text-align: center;
+	}
+	.sstep:last-child {
+		min-height: 340px;
+		padding-bottom: 40px;
+	}
+	.flow-title {
+		justify-content: center;
+	}
+	.sstep h3 {
+		font-size: 21px;
+	}
+	.sstep p {
+		font-size: 15.5px;
+	}
+}
+
+/* =========================================================================
+   One panel, two tabs: group chat vs Mira, and good to know
+   ========================================================================= */
+.tabs-section {
+	padding-block: 28px 44px;
+	background: var(--white);
+	border-top: 1px solid var(--line);
+}
+.tabbar {
+	display: flex;
+	justify-content: center;
+	gap: 4px;
+	width: fit-content;
+	margin: 0 auto 30px;
+	padding: 5px;
+	background: var(--paper);
+	border: 1px solid var(--line);
+	border-radius: 999px;
+}
+.tabbar button {
+	padding: 12px 20px;
+	font: 700 14px/1 var(--sans);
+	color: var(--muted);
+	background: transparent;
+	border: 0;
+	border-radius: 999px;
+	cursor: pointer;
+	transition:
+		background 0.2s,
+		color 0.2s;
+}
+.tabbar button:hover {
+	color: var(--ink);
+}
+.tabbar button[aria-selected='true'] {
+	background: var(--plum);
+	color: var(--white);
+}
+.tabbar button:focus-visible {
+	outline: 3px solid var(--grape);
+	outline-offset: 2px;
+}
+/* without JS both panels are shown, one after the other, and the tab bar is left out;
+   home.js makes them tabs by adding .tabbed */
+.tabs-section:not(.tabbed) .tabbar {
+	display: none;
+}
+.tabs-section:not(.tabbed) .panel + .panel {
+	margin-top: 56px;
+}
+/* both panels share one grid cell, so the box keeps the taller height and never jumps */
+.tabbed .panels {
+	display: grid;
+}
+.tabbed .panel {
+	grid-area: 1 / 1;
+}
+.panel {
+	display: flex;
+	flex-direction: column;
+	justify-content: center;
+	width: 100%;
+	margin: 0 auto;
+}
+.panel[hidden] {
+	display: flex;
+	visibility: hidden;
+	pointer-events: none;
+}
+.tabbed .panel:not([hidden]) {
+	animation: panel-in 0.35s ease both;
+}
+@keyframes panel-in {
+	from {
+		opacity: 0;
+		transform: translateY(8px);
+	}
+}
+.panel-why {
+	max-width: 860px;
+}
+.panel-faq {
+	max-width: 760px;
+}
+.panel h2 {
+	margin-bottom: 22px;
+	font-size: clamp(28px, 2.8vw, 38px);
+}
+.panel .eyebrow {
+	margin-bottom: 10px;
+}
+.vs {
+	overflow: hidden;
+	background: var(--white);
+	border: 1px solid var(--line);
+	border-radius: 16px;
+}
+.vs-row {
+	display: grid;
+	grid-template-columns: 1fr 1fr;
+	border-top: 1px solid var(--line);
+}
+.vs-row p {
+	margin: 0;
+	padding: 14px 18px;
+	font-size: 14.5px;
+	line-height: 1.5;
+}
+.vs-chat {
+	color: var(--muted);
+}
+.vs-mira {
+	background: var(--wash);
+	color: var(--ink);
+	font-weight: 600;
+}
+.vs-mira::before {
+	content: '✓ ';
+	color: var(--grape);
+}
+.vs-head {
+	border-top: 0;
+}
+.vs-head p {
+	padding-block: 11px;
+	font-size: 12px;
+	font-weight: 700;
+	letter-spacing: 0.12em;
+	text-transform: uppercase;
+	color: var(--muted);
+}
+.vs-head p:last-child {
+	background: var(--plum);
+	color: var(--apricot);
+}
+.vs sup {
+	font-size: 10px;
+}
+.why-src {
+	margin: 14px 0 0;
+	font-size: 11.5px;
+	color: var(--muted);
+}
+.panel-faq .answers details {
+	padding-block: 16px;
+}
+.panel-faq summary {
+	font-size: 15px;
+}
+@media (max-width: 900px) {
+	.tabs-section {
+		padding-block: 22px 36px;
+	}
+	.tabbar button {
+		padding: 10px 13px;
+		font-size: 13px;
+	}
+}
+@media (max-width: 520px) {
+	.vs-row p {
+		padding: 12px;
+		font-size: 13.5px;
+	}
+}
+@media (max-width: 420px) {
+	.tabbar {
+		width: 100%;
+	}
+	.tabbar button {
+		flex: 1;
+		padding: 10px 6px;
+		font-size: 12px;
+	}
+}
+
+@media (prefers-reduced-motion: reduce) {
+	.spin,
+	.caret,
+	.sender.ping,
+	.tabbed .panel:not([hidden]) {
+		animation: none;
+	}
+}

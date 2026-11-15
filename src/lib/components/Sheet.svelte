@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { onMount, type Snippet } from 'svelte';
+	import { tabStops, wrapTarget } from './focus-trap.js';
 	let {
 		title,
 		label,
@@ -25,18 +26,43 @@
 			? sheet?.querySelector<HTMLElement>('input:not([type="hidden"]):not([type="color"]), textarea')
 			: null;
 		(field ?? sheet)?.focus({ preventScroll: true });
-		return () => opener?.focus({ preventScroll: true });
+		// bind:this lets go of the element as it is destroyed; keep it for the check below.
+		const dialog = sheet;
+		return () => {
+			// Only when focus would otherwise be lost. A sheet opened from this one's menu
+			// (which closes in the same tick) may already hold it, and the opener may be gone.
+			const active = document.activeElement;
+			const lost = !active || active === document.body || !!dialog?.contains(active);
+			if (lost && opener?.isConnected) opener.focus({ preventScroll: true });
+		};
 	});
 
 	function onKey(e: KeyboardEvent) {
 		if (e.key === 'Escape') onclose();
+	}
+
+	// Keep Tab inside the sheet: from the last control it wraps to the first, and back.
+	function trapTab(e: KeyboardEvent) {
+		if (e.key !== 'Tab' || !sheet) return;
+		const target = wrapTarget(tabStops(sheet), document.activeElement, sheet, e.shiftKey);
+		if (!target) return;
+		e.preventDefault();
+		target.focus();
 	}
 </script>
 
 <svelte:window onkeydown={onKey} />
 
 <div class="scrim" role="presentation" onclick={(e) => e.target === e.currentTarget && onclose()}>
-	<div class="sheet" role="dialog" aria-modal="true" aria-label={label ?? title} tabindex="-1" bind:this={sheet}>
+	<div
+		class="sheet"
+		role="dialog"
+		aria-modal="true"
+		aria-label={label ?? title}
+		tabindex="-1"
+		bind:this={sheet}
+		onkeydown={trapTab}
+	>
 		<div class="grab"></div>
 		{#if title}<h3>{title}</h3>{/if}
 		{@render children()}

@@ -15,6 +15,8 @@
 	/* The accent darkened until it reads as text (WCAG AA); skins.ts derives it per album. */
 	--accent-text: #76624f;
 	--accent-ink: #38243d;
+	/* Error and destructive text, readable (AA) on every surface; skins.ts derives it per album. */
+	--danger-text: #b3261e;
 	--radius: 16px;
 	--font: 'Plus Jakarta Sans Variable', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
 	--font-brand: 'Fraunces Variable', Georgia, 'Times New Roman', serif;
@@ -32,6 +34,7 @@
 	--ink: #f8f5ef;
 	--muted: #c3b9c7;
 	--accent-text: #deb878;
+	--danger-text: #f5a3b4;
 	--cover-grad: linear-gradient(160deg, #3a2a40 0%, #211a26 62%);
 	--shadow: 0 10px 30px rgba(0, 0, 0, 0.4);
 	color-scheme: dark;
@@ -166,7 +169,7 @@ textarea {
 	background: var(--surface-2);
 }
 .err {
-	color: #d23b3b;
+	color: var(--danger-text);
 	font-size: 13px;
 	margin-top: 8px;
 }
@@ -956,6 +959,8 @@ select {
 .selmark.on {
 	background: var(--accent);
 	border-color: var(--accent);
+	/* the tick sits on the accent like a button's label; white vanishes on a pale accent */
+	color: var(--accent-ink);
 }
 .tile.sel,
 .feedcard.sel {

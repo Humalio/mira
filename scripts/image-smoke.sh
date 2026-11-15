@@ -27,7 +27,11 @@ until docker exec "$DB" pg_isready -U mira -d mira >/dev/null 2>&1; do
   sleep 1
 done
 # pg_isready can pass during the image's init restart; wait for a real query.
-until docker exec "$DB" psql -U mira -d mira -c 'select 1' >/dev/null 2>&1; do sleep 1; done
+i=0
+until docker exec "$DB" psql -U mira -d mira -c 'select 1' >/dev/null 2>&1; do
+  i=$((i + 1)); [ "$i" -gt 60 ] && { echo "✗ Postgres never answered a query"; exit 1; }
+  sleep 1
+done
 
 # Share the database container's network namespace so the app reaches 127.0.0.1:5432.
 docker run -d --name "$APP" --network "container:$DB" \

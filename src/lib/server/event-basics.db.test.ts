@@ -4,10 +4,20 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { saveAlbumOptions } from './album-options';
 import { db } from './db';
 import { invitationValid, inviteUrl, resetInvitation } from './invite';
-import { OWNER_ISSUED_MS, canReturn, returnToken, returnTokenValid, takePlace, tokenMemberId } from './return-link';
+import {
+	OWNER_ISSUED_MS,
+	SELF_ISSUED_MS,
+	canReturn,
+	returnLinkTarget,
+	returnToken,
+	returnTokenValid,
+	takePlace,
+	tokenMemberId
+} from './return-link';
 import { albums, favorites, members, moments, photos, users } from './schema';
 import { deleteMediaTree } from './storage';
 import { actions as joinActions, load as joinLoad } from '../../routes/j/[slug]/+page.server';
+import { actions as returnActions, load as returnLoad } from '../../routes/r/[token]/+page.server';
 import { POST as upload } from '../../routes/a/[slug]/upload/+server';
 import { POST as videoInit } from '../../routes/a/[slug]/video/init/+server';
 
@@ -51,6 +61,8 @@ describe('closing an album, resetting its link, and getting a guest back in', ()
 	}
 	const locals = (deviceToken: string) => ({ deviceToken, locale: 'en', auth: async () => null });
 	const member = async (id: string) => (await db.select().from(members).where(eq(members.id, id)))[0];
+	// The member with its row version, which a return link is signed over.
+	const target = async (id: string) => (await returnLinkTarget(id))!;
 
 	async function sendPhoto(slug: string, momentId: string, deviceToken: string) {
 		const image = await sharp({ create: { width: 8, height: 8, channels: 3, background: '#c33' } })
@@ -148,24 +160,40 @@ describe('closing an album, resetting its link, and getting a guest back in', ()
 	it('a return link moves a guest to a new device, exactly once', async () => {
 		const a = await album();
 		const zoe = await a.guest('Zoe');
-		const token = returnToken(await member(zoe.id), OWNER_ISSUED_MS);
+		const token = returnToken(await target(zoe.id), OWNER_ISSUED_MS);
 		expect(tokenMemberId(token)).toBe(zoe.id);
-		expect(returnTokenValid(token, await member(zoe.id))).toBe(true);
+		expect(returnTokenValid(token, await target(zoe.id))).toBe(true);
 
 		const newPhone = crypto.randomUUID();
 		expect(await takePlace(token, zoe.id, newPhone)).toBe(true);
 		expect((await member(zoe.id)).deviceToken).toBe(newPhone);
 
 		// Used: the same link is worth nothing now, to anyone.
-		expect(returnTokenValid(token, await member(zoe.id))).toBe(false);
+		expect(returnTokenValid(token, await target(zoe.id))).toBe(false);
 		expect(await takePlace(token, zoe.id, crypto.randomUUID())).toBe(false);
 		expect((await member(zoe.id)).deviceToken).toBe(newPhone);
 	});
 
+	it('a used link stays used when the guest goes back to the phone it was made on', async () => {
+		const a = await album();
+		const zoe = await a.guest('Zoe');
+		const oldPhone = zoe.deviceToken;
+		const madeOnOldPhone = returnToken(await target(zoe.id), OWNER_ISSUED_MS);
+		expect(await takePlace(madeOnOldPhone, zoe.id, crypto.randomUUID())).toBe(true);
+		// A link of her own takes her back: the old phone's device code is hers again.
+		expect(await takePlace(returnToken(await target(zoe.id), SELF_ISSUED_MS), zoe.id, oldPhone)).toBe(true);
+		expect((await member(zoe.id)).deviceToken).toBe(oldPhone);
+
+		// The first link was used once, and it stays used.
+		expect(returnTokenValid(madeOnOldPhone, await target(zoe.id))).toBe(false);
+		expect(await takePlace(madeOnOldPhone, zoe.id, crypto.randomUUID())).toBe(false);
+		expect((await member(zoe.id)).deviceToken).toBe(oldPhone);
+	});
+
 	it('refuses a link that is expired, altered, or for someone else', async () => {
 		const a = await album();
-		const zoe = await member((await a.guest('Zoe')).id);
-		const other = await member((await a.guest('Iker')).id);
+		const zoe = await target((await a.guest('Zoe')).id);
+		const other = await target((await a.guest('Iker')).id);
 		const token = returnToken(zoe, OWNER_ISSUED_MS);
 
 		expect(returnTokenValid(returnToken(zoe, -1), zoe)).toBe(false); // already expired
@@ -207,7 +235,7 @@ describe('closing an album, resetting its link, and getting a guest back in', ()
 			{ memberId: again.id, photoId: recent }
 		]);
 
-		expect(await takePlace(returnToken(await member(zoe.id), OWNER_ISSUED_MS), zoe.id, again.deviceToken)).toBe(true);
+		expect(await takePlace(returnToken(await target(zoe.id), OWNER_ISSUED_MS), zoe.id, again.deviceToken)).toBe(true);
 
 		expect(await member(again.id)).toBeUndefined();
 		expect((await member(zoe.id)).deviceToken).toBe(again.deviceToken);
@@ -220,9 +248,52 @@ describe('closing an album, resetting its link, and getting a guest back in', ()
 	it('never moves someone who has an account', async () => {
 		const a = await album();
 		const owner = await a.guest('Owner', a.ownerId);
-		const row = await member(owner.id);
+		const row = await target(owner.id);
 		expect(canReturn(row)).toBe(false);
 		expect(await takePlace(returnToken(row, OWNER_ISSUED_MS), owner.id, crypto.randomUUID())).toBe(false);
 		expect((await member(owner.id)).deviceToken).toBe(owner.deviceToken);
+	});
+
+	it('refuses, without using it up, a link opened where the album already has an account', async () => {
+		const a = await album();
+		await a.guest('Ana', a.ownerId); // the owner's own membership, from another device
+		const zoe = await a.guest('Zoe');
+		const token = returnToken(await target(zoe.id), OWNER_ISSUED_MS);
+		// The link opened on a device, by someone signed in (userId) or not.
+		const opened = (deviceToken: string, userId: string | null) => {
+			const event = {
+				params: { token },
+				locals: {
+					deviceToken,
+					locale: 'en',
+					theme: 'light',
+					auth: async () => (userId ? { user: { id: userId } } : null)
+				},
+				request: new Request(`http://localhost/r/${token}`, {
+					method: 'POST',
+					headers: { 'content-type': 'application/x-www-form-urlencoded', 'content-length': '0' },
+					body: ''
+				}),
+				getClientAddress: () => '127.0.0.1'
+			};
+			return {
+				show: () => returnLoad(event as unknown as Parameters<typeof returnLoad>[0]),
+				use: () => returnActions.default(event as unknown as Parameters<typeof returnActions.default>[0])
+			};
+		};
+
+		// The owner, signed in, tries the link on a laptop. Their account would stay who
+		// they are there, so taking Zoe's place would only lose it: refused, and said so.
+		const laptop = opened(crypto.randomUUID(), a.ownerId);
+		expect(await laptop.show()).toMatchObject({ valid: true, accountHere: true });
+		expect(await laptop.use()).toMatchObject({ status: 409, data: { accountHere: true } });
+		expect((await member(zoe.id)).deviceToken).toBe(zoe.deviceToken);
+
+		// The link is still good for Zoe's new phone.
+		const newPhone = crypto.randomUUID();
+		const phone = opened(newPhone, null);
+		expect(await phone.show()).toMatchObject({ valid: true, accountHere: false });
+		await expect(phone.use()).rejects.toMatchObject({ status: 303, location: `/a/${a.slug}` });
+		expect((await member(zoe.id)).deviceToken).toBe(newPhone);
 	});
 });

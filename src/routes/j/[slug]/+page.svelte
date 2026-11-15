@@ -46,16 +46,20 @@
 			</h2>
 			<p class="tagline">{t('join.tagline')}</p>
 			<form method="POST">
+				<!-- An error is announced as it appears and read again with the field it is about. -->
 				<input
 					type="text"
 					name="name"
 					maxlength="80"
 					placeholder={t('join.namePlaceholder')}
+					aria-label={t('join.namePlaceholder')}
 					autocomplete="name"
 					value={form?.name ?? ''}
+					aria-invalid={form?.error ? 'true' : undefined}
+					aria-describedby={form?.error ? 'join-error' : undefined}
 					required
 				/>
-				{#if form?.error}<p style="color: #ff6b6b; font-size: 13px;">{form.error}</p>{/if}
+				{#if form?.error}<p class="err" id="join-error" role="alert">{form.error}</p>{/if}
 				{#if form?.nameTaken}
 					<p class="hint" role="status" style="margin-top: 10px;">{t('join.nameTaken', { name: form.name })}</p>
 				{/if}

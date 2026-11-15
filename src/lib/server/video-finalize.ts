@@ -11,7 +11,7 @@
  * again cannot cure (over the storage limit, a missing chunk) discards the upload.
  */
 import { error, isHttpError } from '@sveltejs/kit';
-import { and, asc, eq, gt, inArray } from 'drizzle-orm';
+import { and, asc, eq, gt, notInArray } from 'drizzle-orm';
 import { rm } from 'node:fs/promises';
 import { translator } from '#lib/i18n/index.js';
 import { admitWithinQuota } from './admin';
@@ -89,6 +89,13 @@ export const finalizeStages = new Map<
 	string,
 	{ phase: 'assembling' | 'queued' | 'compressing' | 'saving'; percent?: number }
 >();
+
+/**
+ * Is this process working on this upload right now? Then its lease can have lapsed
+ * only because the database was away and could not renew it: the upload is still being
+ * finalised, not left behind by a crash, and nobody may fail it or delete its files.
+ */
+export const isFinalizing = (uploadId: string): boolean => finalizeStages.has(uploadId);
 
 /**
  * Run a claimed (`completing`) session to its end in the background and remember the
@@ -188,6 +195,11 @@ export async function startFinalization(
  */
 export async function finalizeReady(): Promise<number> {
 	if (!finalizations.accepting) return 0;
+	// Uploads pausing after a failure that may pass are left out of the query, not
+	// skipped after it: twenty of them at the head of the queue kept every newer upload
+	// waiting until their pauses were over.
+	const now = Date.now();
+	const paused = [...finalizeRetries].filter(([, retry]) => retry.notBefore > now).map(([id]) => id);
 	const ready = await db
 		.select({ id: uploadSessions.id })
 		.from(uploadSessions)
@@ -195,7 +207,8 @@ export async function finalizeReady(): Promise<number> {
 			and(
 				eq(uploadSessions.state, 'receiving'),
 				eq(uploadSessions.receivedBytes, uploadSessions.declaredBytes),
-				gt(uploadSessions.expiresAt, new Date())
+				gt(uploadSessions.expiresAt, new Date(now)),
+				paused.length ? notInArray(uploadSessions.id, paused) : undefined
 			)
 		)
 		.orderBy(asc(uploadSessions.createdAt), asc(uploadSessions.id))
@@ -210,6 +223,29 @@ export async function finalizeReady(): Promise<number> {
 }
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+/**
+ * Was the video's row recorded? Asked until the database answers. Until then nothing
+ * may be deleted (the commit may have gone through and only its answer been lost), and
+ * the session must not be given up either: it used to be left `completing` with nobody
+ * renewing its lease, so the expiry sweep later took it for a crash and deleted every
+ * chunk, although the cause had passed. The caller's lease keeps being renewed while
+ * this waits. A server that is stopping gives up with a 503 and leaves the session
+ * `completing`, which the next start puts back in the queue (see
+ * resumeInterruptedFinalizations); a recorded row would have made it `complete` instead.
+ */
+async function isRecorded(mediaItemId: string): Promise<boolean> {
+	for (let wait = 2_000; ; wait = Math.min(2 * wait, 60_000)) {
+		try {
+			const [recorded] = await db.select({ id: photos.id }).from(photos).where(eq(photos.id, mediaItemId));
+			return !!recorded;
+		} catch (cause) {
+			console.error('[video] database status unknown; media retained', { mediaItemId, cause });
+			if (!finalizations.accepting) throw error(503, 'Completion status unknown; retry after the database recovers');
+			await sleep(wait);
+		}
+	}
+}
 
 /**
  * Put a claimed upload back in the queue after a failure that may pass. Its chunks
@@ -282,7 +318,7 @@ async function finalizeUpload(
 		await ensureMediaItemDir(album.slug, mediaItemId);
 		await storeVideoPlaceholder(album.slug, mediaItemId);
 		await saveOriginalName(album.slug, mediaItemId, await readUploadName(uploadId));
-		const size = await assembleUpload(uploadId, session.totalChunks, absPath);
+		const size = await assembleUpload(uploadId, session.totalChunks, absPath, session.declaredBytes);
 		if (size !== session.declaredBytes) throw new PermanentFailure('assembled size does not match upload manifest');
 
 		// Re-check the per-file size cap against the bytes actually written; the quota
@@ -375,17 +411,10 @@ async function finalizeUpload(
 		}
 		if (!admitted) throw error(413, t('srv.storageLimit'));
 	} catch (cause) {
-		if (attemptedAdmission) {
-			try {
-				const [recorded] = await db.select({ id: photos.id }).from(photos).where(eq(photos.id, mediaItemId));
-				if (recorded) {
-					await cleanupUpload(uploadId).catch(() => {});
-					return 'done';
-				}
-			} catch {
-				console.error('[video] database status unknown; media retained', { mediaItemId });
-				throw error(503, 'Completion status unknown; retry after the database recovers');
-			}
+		if (attemptedAdmission && (await isRecorded(mediaItemId))) {
+			// The row committed and only the answer was lost: the video is in.
+			await cleanupUpload(uploadId).catch(() => {});
+			return 'done';
 		}
 		// Whatever was assembled or encoded so far can be made again from the chunks.
 		await deleteMediaItemDir(album.slug, mediaItemId).catch(() => {});
@@ -410,18 +439,17 @@ async function finalizeUpload(
  * that died mid-finalisation (a restart or a deploy during compression). Its photo row
  * was never written, because that row and the `complete` state commit together, but
  * every uploaded chunk is still on disk. So do not make the person send a gigabyte
- * again: clear the half-written output and run the finalisation from the start, one
- * video at a time. The uploader may have closed the page long ago; nothing here needs
- * them. Sessions that cannot be resumed are failed, so a polling client gets an answer.
- * Returns how many were resumed and failed; the resumed work continues in the background.
+ * again: clear the half-written output and put the upload back in the queue, from
+ * which it is started like any other waiting upload, oldest first, by the same two
+ * finalisers. (It used to be run straight away beside them, one finalisation more than
+ * the server is sized for.) The uploader may have closed the page long ago; nothing
+ * here needs them. Sessions that cannot be resumed are failed, so a polling client gets
+ * an answer. Returns how many were put back and how many failed; the work itself
+ * continues in the background.
  */
-export async function resumeInterruptedFinalizations(): Promise<{
-	resumed: number;
-	failed: number;
-	done: Promise<void>;
-}> {
+export async function resumeInterruptedFinalizations(): Promise<{ resumed: number; failed: number }> {
 	const stuck = await db.select().from(uploadSessions).where(eq(uploadSessions.state, 'completing'));
-	const resumable: { session: UploadSession; album: Album }[] = [];
+	let resumed = 0;
 	let failed = 0;
 	for (const session of stuck) {
 		try {
@@ -429,12 +457,18 @@ export async function resumeInterruptedFinalizations(): Promise<{
 			// Remove whatever the dead process left behind, in either case.
 			if (album) await deleteMediaItemDir(album.slug, session.id);
 			if (album && session.receivedBytes === session.declaredBytes) {
-				const [renewed] = await db
+				// Kept as long as a failure that may pass would keep it (see requeue), and in
+				// any case long enough to be started.
+				const keepUntil = Math.max(session.createdAt.getTime() + RETRY_HORIZON_MS, Date.now() + LEASE_MS);
+				const [back] = await db
 					.update(uploadSessions)
-					.set({ expiresAt: new Date(Date.now() + LEASE_MS) })
+					.set({ state: 'receiving', expiresAt: new Date(keepUntil) })
 					.where(and(eq(uploadSessions.id, session.id), eq(uploadSessions.state, 'completing')))
-					.returning();
-				if (renewed) resumable.push({ session: renewed, album });
+					.returning({ id: uploadSessions.id });
+				if (back) {
+					finalizeRetries.delete(session.id); // no pause: it goes as soon as a finaliser is free
+					resumed++;
+				}
 				continue;
 			}
 			await db
@@ -450,30 +484,9 @@ export async function resumeInterruptedFinalizations(): Promise<{
 			});
 		}
 	}
-	if (resumable.length || failed)
-		console.warn('[uploads] finalisations interrupted by the previous shutdown', { resumed: resumable.length, failed });
-	const t = translator('en'); // nobody is necessarily watching; messages only reach a polling client
-	// Each running finalisation renews its own lease; this covers the ones still waiting
-	// their turn, which could otherwise lapse behind a long encode and be swept away.
-	const waiting = new Set(resumable.map(({ session }) => session.id));
-	const keepWaitingAlive = setInterval(() => {
-		if (!waiting.size) return;
-		db.update(uploadSessions)
-			.set({ expiresAt: new Date(Date.now() + LEASE_MS) })
-			.where(and(inArray(uploadSessions.id, [...waiting]), eq(uploadSessions.state, 'completing')))
-			.catch((cause) => console.error('[uploads] could not renew waiting finalisation leases', cause));
-	}, 60_000);
-	const done = (async () => {
-		try {
-			for (const { session, album } of resumable) {
-				// The server is stopping: leave the rest claimed, the next start resumes them.
-				if (!finalizations.accepting) break;
-				waiting.delete(session.id);
-				await runFinalization(session, album, t);
-			}
-		} finally {
-			clearInterval(keepWaitingAlive);
-		}
-	})();
-	return { resumed: resumable.length, failed, done };
+	if (resumed || failed)
+		console.warn('[uploads] finalisations interrupted by the previous shutdown', { resumed, failed });
+	// As many start now as there are free finalisers; each one that ends starts the next.
+	await finalizeReady();
+	return { resumed, failed };
 }

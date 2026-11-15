@@ -70,5 +70,9 @@ export function uniqueNames(): (folder: string, name: string) => string {
 /** A `Content-Disposition` value that saves under `name` in every browser, accents included. */
 export function attachment(name: string): string {
 	const ascii = name.replace(/[^\x20-\x7e]/g, '_').replace(/["\\]/g, '_');
-	return `attachment; filename="${ascii}"; filename*=UTF-8''${encodeURIComponent(name)}`;
+	// RFC 8187 lets fewer characters through unencoded than encodeURIComponent does:
+	// ' ( ) * must be encoded too, or Firefox rejects this form and saves under the
+	// plain name above ("IMG_0001 (2).jpg" is an everyday name).
+	const encoded = encodeURIComponent(name).replace(/['()*]/g, (c) => `%${c.charCodeAt(0).toString(16).toUpperCase()}`);
+	return `attachment; filename="${ascii}"; filename*=UTF-8''${encoded}`;
 }

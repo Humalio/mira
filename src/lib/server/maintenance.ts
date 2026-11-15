@@ -1,7 +1,7 @@
 import postgres from 'postgres';
 import { reconcileStorageCounters } from './admin';
 import { cleanupExpiredUploadSessions } from './uploads';
-import { finalizations, finalizeReady, resumeInterruptedFinalizations } from './video-finalize';
+import { finalizations, finalizeReady, isFinalizing, resumeInterruptedFinalizations } from './video-finalize';
 import { drainMediaDeletions } from './media-deletions';
 
 const SWEEP_INTERVAL_MS = 5 * 60_000;
@@ -12,7 +12,9 @@ let started = false;
 async function sweep(): Promise<void> {
 	await drainMediaDeletions().catch((cause) => console.error('[maintenance] deletion sweep failed', cause));
 	try {
-		await cleanupExpiredUploadSessions();
+		// A video this process is still finalising is not swept, even with a lapsed lease
+		// (the database may have been away and unable to renew it).
+		await cleanupExpiredUploadSessions(new Date(), isFinalizing);
 	} catch (cause) {
 		console.error('[maintenance] upload-session sweep failed', cause);
 	}

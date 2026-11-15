@@ -6,6 +6,7 @@
  */
 import { and, eq, gt, inArray, sql } from 'drizzle-orm';
 import { createHash } from 'node:crypto';
+import { getAlbumOptions } from './album-options';
 import { db } from './db';
 import { members, uploadSessions, type Album } from './schema';
 import { finalizeStages } from './video-finalize';
@@ -93,23 +94,32 @@ export async function preparingVideos(albumId: string, viewer: Viewer): Promise<
 
 /**
  * A short string that changes whenever what this viewer can see in the album changes:
- * an item added, approved or deleted, a moment added or renamed, someone joining, or
- * the album renamed or restyled.
+ * an item added, approved or deleted, a moment added or renamed, someone joining, the
+ * album renamed or restyled, or one of its switches changed (closed or reopened, the
+ * invitation link replaced, videos kept only as a small copy).
  */
 export async function albumStamp(
-	album: Pick<Album, 'id' | 'name' | 'skin' | 'accent' | 'autoApprove' | 'videoQuality'>,
+	album: Pick<Album, 'id' | 'slug' | 'name' | 'skin' | 'accent' | 'autoApprove' | 'videoQuality'>,
 	viewer: Viewer
 ): Promise<string> {
 	const visible = viewer.isOwner ? sql`true` : sql`(p.approved or p.member_id = ${viewer.memberId})`;
-	const [row] = await db.execute<{ media: string; moments: string; people: string }>(sql`
-		select
-			(select concat_ws(':', count(*), count(*) filter (where not p.approved),
-					coalesce(extract(epoch from max(p.created_at)), 0))
-				from photos p where p.album_id = ${album.id} and ${visible}) as media,
-			(select coalesce(md5(string_agg(m.id || m.name, ',' order by m.position, m.created_at)), '')
-				from moments m where m.album_id = ${album.id}) as moments,
-			(select count(*)::text from members e where e.album_id = ${album.id}) as people
-	`);
+	const [[row], options] = await Promise.all([
+		db.execute<{ media: string; moments: string; people: string }>(sql`
+			select
+				(select concat_ws(':', count(*), count(*) filter (where not p.approved),
+						coalesce(extract(epoch from max(p.created_at)), 0))
+					from photos p where p.album_id = ${album.id} and ${visible}) as media,
+				(select coalesce(md5(string_agg(m.id || m.name, ',' order by m.position, m.created_at)), '')
+					from moments m where m.album_id = ${album.id}) as moments,
+				(select count(*)::text from members e where e.album_id = ${album.id}) as people
+		`),
+		// The page shows these too: the "closed" banner, the invitation link and its QR
+		// code, the note on how videos are kept. Without them in the stamp, guests kept a
+		// "closed" banner after the album reopened, and members kept handing out a link
+		// that no longer let anyone in. (Members see the invitation key in that link
+		// anyway; here it only goes into the hash.)
+		getAlbumOptions(album.slug)
+	]);
 	const parts = [
 		row.media,
 		row.moments,
@@ -118,7 +128,11 @@ export async function albumStamp(
 		album.skin,
 		album.accent ?? '',
 		album.autoApprove ? 1 : 0,
-		album.videoQuality
+		album.videoQuality,
+		options.locked ? 1 : 0,
+		options.inviteKey ?? '',
+		options.keepOnlyCopy ? 1 : 0,
+		options.unreadable ? 1 : 0
 	];
 	return createHash('sha256').update(parts.join('|')).digest('base64url').slice(0, 22);
 }

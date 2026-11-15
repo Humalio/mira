@@ -6,7 +6,13 @@ import { translator } from '#lib/i18n/index.js';
 import { getSettings } from '#lib/server/users.js';
 import { memberScopedId, newId } from '#lib/server/ids.js';
 import { moments, photos } from '#lib/server/schema.js';
-import { TooManyPixelsError, deleteMediaItemDir, saveOriginalName, storeImage } from '#lib/server/storage.js';
+import {
+	TooManyPixelsError,
+	deleteMediaItemDir,
+	mediaFilesExist,
+	saveOriginalName,
+	storeImage
+} from '#lib/server/storage.js';
 import { error } from '@sveltejs/kit';
 import { LIMITS, requireContentLength, requiredUuid } from '#lib/server/input.js';
 import { rateLimit } from '#lib/server/rate-limit.js';
@@ -15,6 +21,15 @@ import type { RequestHandler } from './$types';
 import { acquireImageProcessing } from '#lib/server/concurrency.js';
 
 const MAX_MEGAPIXELS = Math.floor(LIMITS.imagePixels / 1_000_000);
+
+/** Does a row use this item's folder? Null when the database cannot say. */
+async function recorded(mediaItemId: string): Promise<boolean | null> {
+	try {
+		return (await db.select({ id: photos.id }).from(photos).where(eq(photos.id, mediaItemId))).length > 0;
+	} catch {
+		return null;
+	}
+}
 
 export const POST: RequestHandler = async ({ params, request, locals }) => {
 	const t = translator(locals.locale);
@@ -26,13 +41,18 @@ export const POST: RequestHandler = async ({ params, request, locals }) => {
 
 	const settings = await getSettings();
 	const isOwner = await isAlbumOwner(album, locals);
-	if (settings.uploadsPaused) throw error(503, t('srv.uploadsPaused'));
+	// 423, not 503: the page retries a 503 (a busy server) for minutes, while a pause is
+	// the operator's decision and is shown to the person at once.
+	if (settings.uploadsPaused) throw error(423, t('srv.uploadsPaused'));
 	if ((await getAlbumOptions(album.slug)).locked) throw error(403, t('srv.albumClosed'));
 	const MAX_BYTES = settings.maxUploadMb * 1024 * 1024;
 	requireContentLength(request, Math.min(MAX_BYTES, LIMITS.imageBytes) + 1024 * 1024);
+	// The body is read before a slot is taken: two phones on slow venue Wi-Fi took
+	// minutes to send their photos while holding both slots, and everyone else got 503s.
+	// Its size is bounded by the Content-Length check above.
+	const fd = await request.formData();
 	const release = await acquireImageProcessing();
 	try {
-		const fd = await request.formData();
 		const momentId = requiredUuid(fd.get('momentId'), 'Moment id');
 		const moment = (
 			await db
@@ -97,6 +117,13 @@ export const POST: RequestHandler = async ({ params, request, locals }) => {
 				// already on disk; if it doesn't fit, drop it back off.
 				attemptedAdmission = true;
 				const admitted = await admitWithinQuota(album, stored.sizeBytes, async (tx) => {
+					// The files were written before this lock was taken. If this photo was
+					// deleted and this is a retry of it, the queued removal of its folder runs
+					// under the same lock (see media-deletions.ts) and may have taken them
+					// meanwhile. Never record a row for files that are not there; once the row
+					// exists, that removal leaves the folder alone.
+					if (!(await mediaFilesExist(stored.storageKey, stored.thumbKey)))
+						throw new Error('photo files were removed before they could be recorded');
 					await tx.insert(photos).values({
 						id: mediaItemId,
 						albumId: album.id,
@@ -107,7 +134,16 @@ export const POST: RequestHandler = async ({ params, request, locals }) => {
 					});
 				});
 				if (!admitted) {
-					await deleteMediaItemDir(album.slug, mediaItemId).catch(() => {});
+					// The rule of the catch below holds here too: a concurrent retry with the
+					// same client id may have recorded this very item meanwhile (that is why
+					// this one no longer fits), and its row uses this folder. Then it is in.
+					const known = clientId ? await recorded(mediaItemId) : false;
+					if (known) {
+						added++;
+						continue;
+					}
+					if (known === null) console.error('[upload] database status unknown; media retained', { mediaItemId });
+					else await deleteMediaItemDir(album.slug, mediaItemId).catch(() => {});
 					skipped.push({ name: fileName, reason: 'over_quota' });
 					continue;
 				}
@@ -118,13 +154,12 @@ export const POST: RequestHandler = async ({ params, request, locals }) => {
 				// row at this same path — never delete media without first confirming no row
 				// references it. (Nobody else can reach this path: the id is member-scoped.)
 				if (attemptedAdmission || clientId) {
-					try {
-						const [recorded] = await db.select({ id: photos.id }).from(photos).where(eq(photos.id, mediaItemId));
-						if (recorded) {
-							added++;
-							continue;
-						}
-					} catch {
+					const known = await recorded(mediaItemId);
+					if (known) {
+						added++;
+						continue;
+					}
+					if (known === null) {
 						// A commit may have succeeded while its response was lost. Keep the file
 						// for reconciliation rather than deleting a possibly referenced item.
 						console.error('[upload] database status unknown; media retained', { mediaItemId });

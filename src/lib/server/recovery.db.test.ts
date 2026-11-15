@@ -64,7 +64,7 @@ describe('durable upload and deletion recovery', () => {
 			params: { slug },
 			request: new Request(url, { method: 'POST', headers: { 'content-length': '3' }, body: content }),
 			url,
-			locals: { deviceToken: ownerId }
+			locals: { deviceToken: ownerId, locale: 'en', auth: async () => null }
 		} as Parameters<typeof POST>[0]);
 	}
 	afterAll(async () => {
@@ -171,9 +171,8 @@ describe('durable upload and deletion recovery', () => {
 		const recovery = await resumeInterruptedFinalizations();
 		expect(recovery.resumed).toBeGreaterThanOrEqual(1);
 		expect(recovery.failed).toBeGreaterThanOrEqual(1);
-		await recovery.done;
-
-		expect(await stateOf(id)).toBe('complete');
+		// Back in the queue, it is started by a free finaliser like any waiting upload.
+		await vi.waitFor(async () => expect(await stateOf(id)).toBe('complete'), { timeout: 15_000 });
 		const [video] = await db.select().from(photos).where(eq(photos.id, id));
 		expect(video).toMatchObject({ kind: 'video', memberId, sizeBytes: 3, optimized: false });
 		expect(await readFile(mediaWritePath(video.storageKey), 'utf8')).toBe('abc');

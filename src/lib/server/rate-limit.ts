@@ -29,12 +29,28 @@ export function rateLimit(key: string, limit: number, windowMs: number): void {
 	current.count++;
 }
 
+let warnedUnknownAddress = false;
+
 export function requestAddress(request: Request, getClientAddress?: () => string): string {
 	// Adapter-node's getClientAddress is authoritative. Forwarded headers are not
 	// trusted here because that trust belongs in the reverse-proxy adapter config.
+	let address: string | undefined;
+	let reason = 'none was given';
 	try {
-		return getClientAddress?.() || 'unknown';
-	} catch {
-		return 'unknown';
+		address = getClientAddress?.();
+	} catch (cause) {
+		// adapter-node throws when ADDRESS_HEADER names a header the request lacks.
+		reason = cause instanceof Error ? cause.message : String(cause);
 	}
+	if (address) return address;
+	// Every such request shares the one 'unknown' bucket, so its limits apply to all of
+	// those guests together. Usually the proxy does not send the address header. Say so
+	// once, not on every request.
+	if (!warnedUnknownAddress) {
+		warnedUnknownAddress = true;
+		console.warn(
+			`[rate-limit] client address unknown (${reason}); requests without one share a single rate limit. The reverse proxy must send the header named in ADDRESS_HEADER (X-Forwarded-For by default): see "Reverse proxy" in docs/DEPLOYMENT.md.`
+		);
+	}
+	return 'unknown';
 }

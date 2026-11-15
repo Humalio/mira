@@ -3,7 +3,7 @@ import exifr from 'exifr';
 import { pipeline } from 'node:stream/promises';
 import { randomUUID } from 'node:crypto';
 import { createWriteStream } from 'node:fs';
-import { link, mkdir, readFile, rename, rm, statfs, unlink, writeFile } from 'node:fs/promises';
+import { access, link, mkdir, readFile, rename, rm, statfs, unlink, writeFile } from 'node:fs/promises';
 import { join, resolve, sep } from 'node:path';
 import sharp from 'sharp';
 import { cleanFileName } from './archive-names';
@@ -54,13 +54,17 @@ export class TooManyPixelsError extends Error {
 /**
  * Persist an uploaded image: keep the original, generate a light WebP thumbnail,
  * and pull the capture time from EXIF (used only to sub-order within a moment).
- * Throws if the buffer isn't a supported image.
+ * Throws if the buffer isn't a supported image. A failure can leave the item's folder
+ * behind; the caller removes it once it knows no row uses that folder (a retry of the
+ * same photo may have recorded one meanwhile, see the upload endpoint).
  */
 export async function storeImage(albumSlug: string, mediaItemId: string, input: Buffer): Promise<StoredImage> {
 	// Reading the header decodes nothing, so the size can be judged here, by us, and the
 	// uploader told the real reason instead of "couldn't process that file".
 	const meta = await sharp(input, { failOn: 'error', limitInputPixels: false }).metadata();
-	const format = meta.format ?? '';
+	// libheif reads AVIF and HEIC alike and sharp calls both "heif"; the codec tells them
+	// apart. Without this an AVIF was kept as orig.heic and served as image/heic.
+	const format = meta.format === 'heif' && meta.compression === 'av1' ? 'avif' : (meta.format ?? '');
 	const ext = FORMAT_EXT[format];
 	if (!ext) throw new Error(`unsupported image format: ${format || 'unknown'}`);
 	if ((meta.width ?? 0) * (meta.height ?? 0) > LIMITS.imagePixels) throw new TooManyPixelsError();
@@ -94,21 +98,18 @@ export async function storeImage(albumSlug: string, mediaItemId: string, input: 
 	const storageKey = `${albumSlug}/${mediaItemId}/orig.${ext}`;
 	const thumbKey = `${albumSlug}/${mediaItemId}/thumb.webp`;
 	await ensureMediaItemDir(albumSlug, mediaItemId);
-	try {
-		// PRODUCT DECISION (owner, 2026-10-10): originals are stored and served byte-exact,
-		// with ALL embedded metadata, including EXIF capture time and GPS location. Sharing
-		// untouched originals is the point of Mira, so do not strip, re-encode or otherwise
-		// alter this buffer, and do not re-raise it as a privacy finding: the join page
-		// tells guests, and docs/DEPLOYMENT.md records it. Only the thumbnail above is
-		// re-encoded (and therefore carries no EXIF/GPS).
-		await writeFile(mediaWritePath(storageKey), input);
-		await writeFile(mediaWritePath(thumbKey), thumb);
-	} catch (e) {
-		// A half-written photo dir (orig without thumb, or neither) would be an orphan
-		// with no DB row — clean it up so a failed write leaves nothing behind.
-		await deleteMediaItemDir(albumSlug, mediaItemId).catch(() => {});
-		throw e;
-	}
+	// PRODUCT DECISION (owner, 2026-10-10): originals are stored and served byte-exact,
+	// with ALL embedded metadata, including EXIF capture time and GPS location. Sharing
+	// untouched originals is the point of Mira, so do not strip, re-encode or otherwise
+	// alter this buffer, and do not re-raise it as a privacy finding: the join page
+	// tells guests, and docs/DEPLOYMENT.md records it. Only the thumbnail above is
+	// re-encoded (and therefore carries no EXIF/GPS).
+	// Written whole and then renamed into place: a retry of a photo that is already
+	// recorded writes over that photo's own files, and a failure half-way (a full disk)
+	// must leave them as they were, not truncated. No folder is removed here on failure:
+	// whether a row uses it is for the caller to find out first.
+	await writeFileAtomic(mediaWritePath(storageKey), input);
+	await writeFileAtomic(mediaWritePath(thumbKey), thumb);
 
 	return {
 		storageKey,
@@ -137,6 +138,16 @@ export function mediaWritePath(key: string): string {
 /** Ensure a per-media-item directory exists. */
 export async function ensureMediaItemDir(albumSlug: string, mediaItemId: string): Promise<void> {
 	await mkdir(mediaWritePath(join(albumSlug, mediaItemId)), { recursive: true });
+}
+
+/** Are all these media files on disk? */
+export async function mediaFilesExist(...keys: string[]): Promise<boolean> {
+	try {
+		await Promise.all(keys.map((key) => access(mediaWritePath(key))));
+		return true;
+	} catch {
+		return false;
+	}
 }
 
 /** Remove all files for a media item (original + thumbnail/poster). */
@@ -237,8 +248,26 @@ export async function writeChunk(uploadId: string, index: number, data: Buffer):
 	}
 }
 
-/** Concatenate chunks `0..total-1` into `destAbsPath`; returns the assembled byte length. */
-export async function assembleUpload(uploadId: string, total: number, destAbsPath: string): Promise<number> {
+/**
+ * Upper bound for putting an upload's chunks together. It is there to free a finaliser
+ * from a disk that has stopped answering, not to cap the size: a fixed five minutes
+ * failed a multi-gigabyte video on a slow disk at every retry until it was deleted. So
+ * it grows with the upload: five minutes plus a minute per 100 MB (about an hour for 5 GB).
+ */
+export function assemblyTimeoutMs(bytes: number): number {
+	return 5 * 60_000 + Math.ceil(Math.max(0, bytes) / (100 * 1024 * 1024)) * 60_000;
+}
+
+/**
+ * Concatenate chunks `0..total-1` into `destAbsPath`; returns the assembled byte length.
+ * `expectedBytes` (the declared size) sets how long it may take (see `assemblyTimeoutMs`).
+ */
+export async function assembleUpload(
+	uploadId: string,
+	total: number,
+	destAbsPath: string,
+	expectedBytes = 0
+): Promise<number> {
 	const dir = uploadDir(uploadId);
 	let size = 0;
 	async function* chunks() {
@@ -249,7 +278,9 @@ export async function assembleUpload(uploadId: string, total: number, destAbsPat
 		}
 	}
 	// Install stream error handling before the first asynchronous file read.
-	await pipeline(chunks(), createWriteStream(destAbsPath), { signal: AbortSignal.timeout(5 * 60_000) });
+	await pipeline(chunks(), createWriteStream(destAbsPath), {
+		signal: AbortSignal.timeout(assemblyTimeoutMs(expectedBytes))
+	});
 	return size;
 }
 

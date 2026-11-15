@@ -1,5 +1,6 @@
-import { eq, sql } from 'drizzle-orm';
+import { eq } from 'drizzle-orm';
 import { db } from './db';
+import { lockOwner } from './locks';
 import { albums, mediaDeletions, photos } from './schema';
 import { cleanupUpload, deleteMediaTree } from './storage';
 import { newId } from './ids';
@@ -18,11 +19,14 @@ let draining = false;
  * One item's folder (`<slug>/<id>`). Small and quick, and the one case where a writer
  * could still be about: a retried upload of the same item. So it is done under the
  * owner's lock, which uploads take to record a row, and skipped if a row for the item
- * exists again.
+ * exists again. That upload writes its files BEFORE it takes the lock, so this can still
+ * remove them in between; the upload therefore checks under the lock that its files are
+ * there before it records the row (see the upload endpoint), and a row never points at
+ * a folder this removed.
  */
 async function removeItemFolder(job: Job): Promise<void> {
 	await db.transaction(async (tx) => {
-		await tx.execute(sql`select pg_advisory_xact_lock(hashtext(${job.ownerId}))`);
+		await lockOwner(tx, job.ownerId);
 		const [current] = await tx.select().from(mediaDeletions).where(eq(mediaDeletions.id, job.id)).for('update');
 		if (!current) return;
 		const [live] = await tx

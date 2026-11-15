@@ -41,3 +41,26 @@
 - A ZIP download that is cancelled closes the file it was reading, so repeated cancelled downloads cannot exhaust the server's open files.
 - An unknown album look can no longer be saved and break the album's pages; an admin limit out of range says which setting is wrong.
 - A video piece sent without its number is refused instead of being taken as the first piece.
+- Photo uploads no longer hang on a connection that goes silent, and one photo that cannot be sent no longer stops the rest of the batch or the videos after it.
+- Removing the administrator password and later `MIRA_ADMIN_IDENTITIES` can no longer leave an installation with no administrator and registration open: the old password account no longer counts as an administrator once its sign-in is off.
+- A video upload that resumes after a long pause is checked against the storage limit again, instead of being refused only after every piece was sent.
+- A photo retried near the storage limit no longer removes the files of the copy that was already saved.
+- Slow phones no longer hold the server's processing places while their files are still arriving, so other people's uploads are not turned away.
+- An open album stays on the page being read when new items arrive. Closing or reopening it, resetting its invitation and changing its video settings now reach pages that are already open.
+- A refused action in the album's sheets (adding a moment, renaming, a return link) says why instead of doing nothing.
+- A return link works once, even if its guest later goes back to an earlier phone. Someone signed in to an account who opens a guest's return link is told so and the link stays usable. Links made before this version stop working.
+- Taking administrator rights from an account named in `MIRA_ADMIN_IDENTITIES`, or from the password account, is refused with an explanation, since the next sign-in would restore them.
+- Large videos on slow disks get time to be put together; a database hiccup while a video is being finished no longer discards it; a busy encoder no longer leaves a video without its playback copy; and uploads waiting to retry no longer hold up newer ones.
+- AVIF photos are kept, shown and downloaded as AVIF. Ones added earlier stay labelled HEIC.
+- Download names with apostrophes or brackets keep their accented letters in Firefox.
+- After someone signs out of a shared browser, the next person can no longer cancel or affect that account's video uploads.
+- Starting a video upload is retried like its pieces and never leaves a second, empty upload behind; a video the phone gives no type for is recognised by its file extension; and paused uploads are reported at once instead of after minutes of retrying.
+- Sharing on a slow connection asks for a second tap once the files are ready instead of silently doing nothing; making a video's preview image can no longer hang; Cancel stops at once; and messages never show raw browser errors.
+- Keyboard focus stays inside the photo viewer and the sheets and returns to where it was.
+- Text on buttons stays readable with any album colour, and secondary and error text reach the WCAG AA contrast level on every look. Linen, Mist and Sage use a slightly darker colour so their white button text is readable. Switches and option buttons are labelled for screen readers, and the join page announces its errors.
+- The release's environment example leaves `PUBLIC_ORIGIN` commented out, so invitation links follow `ORIGIN` instead of pointing at localhost.
+- Stopping a container while it is starting up (waiting for the database or for another copy to finish) now ends it at once. The health check allows for a slow start; building the image needs Docker Engine 25 or later.
+- The reverse proxy must send `X-Forwarded-For` (the hosting guide now says so); without it the server logs a warning once, because every guest would share one rate limit.
+- Editing only comments or spacing in the database schema no longer stops existing installations from starting. Existing databases are accepted and updated on first start.
+- A release publishes exactly the image that was tested and scanned, and refuses a version number that was already used, drafts included. An image build fails if a platform-specific part could not be downloaded, instead of keeping a broken step in the build cache.
+- The project website reads fully without JavaScript, fits small phones without sideways scrolling, and announces copied commands to screen readers.

@@ -142,8 +142,12 @@ async function githubEmailVerified(accessToken: string | undefined, email: strin
 }
 
 export const { handle, signIn, signOut } = SvelteKitAuth({
-	// adapter-node constructs request URLs from the configured ORIGIN; hooks also
-	// rejects non-canonical production origins before Auth.js sees the request.
+	// Auth.js refuses to answer in production unless told the host can be trusted. Its
+	// sign-in and callback routes build their addresses from the request URL, which
+	// scripts/start.mjs sets to ORIGIN whatever Host the client sent. Only the session
+	// look-up behind locals.auth() reads Host or X-Forwarded-Host, to address a request
+	// that never leaves the server. (The signIn/signOut helpers exported below would
+	// read them too; nothing uses them: the sign-in forms post to /auth/... directly.)
 	trustHost: true,
 	secret: process.env.AUTH_SECRET,
 	providers,

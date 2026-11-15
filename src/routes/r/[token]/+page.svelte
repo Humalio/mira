@@ -6,6 +6,8 @@
 	let { data, form } = $props();
 	const t = $derived(translator(data.locale));
 	const usable = $derived(data.valid && !form?.gone);
+	// This browser is in the album with an account: the link is refused, and not used up.
+	const taken = $derived(data.valid && (data.accountHere || Boolean(form?.accountHere)));
 </script>
 
 <svelte:head>
@@ -16,7 +18,10 @@
 <div class="app" style={data.valid ? data.themeStyle : ''}>
 	<div class="wrap">
 		<Brand />
-		{#if usable && data.valid}
+		{#if usable && data.valid && taken}
+			<h2>{t('return.account.title', { album: data.albumName })}</h2>
+			<p class="tagline">{t('return.account.body', { name: data.memberName })}</p>
+		{:else if usable && data.valid}
 			<h2>{t('return.title', { album: data.albumName, name: data.memberName })}</h2>
 			<p class="tagline">{t('return.body', { name: data.memberName })}</p>
 			<form method="POST">

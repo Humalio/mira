@@ -1,18 +1,24 @@
-import { eq, sql } from 'drizzle-orm';
+import { eq, inArray } from 'drizzle-orm';
+import { PgDatabase } from 'drizzle-orm/pg-core';
 import { existsSync } from 'node:fs';
 import { readFile, readdir, writeFile } from 'node:fs/promises';
 import sharp from 'sharp';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
+import * as admin from './admin';
 import { db } from './db';
 import { memberScopedId } from './ids';
 import { LIMITS } from './input';
+import { lockOwner } from './locks';
 import { drainMediaDeletions, enqueueMediaDeletion } from './media-deletions';
-import { OWNER_ISSUED_MS, returnToken, takePlace } from './return-link';
+import { OWNER_ISSUED_MS, returnLinkTarget, returnToken, takePlace } from './return-link';
 import { albums, mediaDeletions, members, moments, photos, uploadSessions, users } from './schema';
 import * as storage from './storage';
 import { UPLOAD_QUIET_MS, UPLOAD_TTL_MS } from './uploads';
+import { getSettings } from './users';
 import { finalizeReady, finalizeRetries, startFinalization } from './video-finalize';
 import { POST as upload } from '../../routes/a/[slug]/upload/+server';
+import { POST as videoAbort } from '../../routes/a/[slug]/video/abort/+server';
+import { POST as videoChunk } from '../../routes/a/[slug]/video/chunk/+server';
 import { POST as videoComplete } from '../../routes/a/[slug]/video/complete/+server';
 import { POST as videoInit } from '../../routes/a/[slug]/video/init/+server';
 
@@ -87,8 +93,14 @@ describe('uploads are not lost to other people, limits or passing failures', () 
 		return response.json();
 	}
 
-	function startVideo(a: Album, who: Guest, totalBytes: number) {
-		const body = JSON.stringify({ momentId: a.momentId, mime: 'video/mp4', totalBytes });
+	function startVideo(
+		a: Album,
+		who: Guest,
+		totalBytes: number,
+		browser: object = locals(who.deviceToken),
+		clientId?: string
+	) {
+		const body = JSON.stringify({ momentId: a.momentId, mime: 'video/mp4', totalBytes, clientId });
 		return videoInit({
 			params: { slug: a.slug },
 			request: new Request(`http://localhost/a/${a.slug}/video/init`, {
@@ -96,8 +108,45 @@ describe('uploads are not lost to other people, limits or passing failures', () 
 				headers: { 'content-length': String(body.length) },
 				body
 			}),
-			locals: locals(who.deviceToken)
+			locals: browser
 		} as unknown as Parameters<typeof videoInit>[0]);
+	}
+
+	/** Send chunk 0 of `bytes` bytes, from `browser` (see `locals`). */
+	function sendChunk(a: Album, browser: object, uploadId: string, bytes: number) {
+		const url = new URL(`http://localhost/a/${a.slug}/video/chunk?uploadId=${uploadId}&index=0`);
+		return videoChunk({
+			params: { slug: a.slug },
+			request: new Request(url, {
+				method: 'POST',
+				headers: { 'content-length': String(bytes) },
+				body: new Uint8Array(bytes)
+			}),
+			url,
+			locals: browser
+		} as unknown as Parameters<typeof videoChunk>[0]);
+	}
+
+	function cancelVideo(a: Album, browser: object, uploadId: string) {
+		const url = new URL(`http://localhost/a/${a.slug}/video/abort?uploadId=${uploadId}`);
+		return videoAbort({
+			params: { slug: a.slug },
+			url,
+			locals: browser
+		} as unknown as Parameters<typeof videoAbort>[0]);
+	}
+
+	function finishVideo(a: Album, browser: object, uploadId: string) {
+		const body = JSON.stringify({ uploadId });
+		return videoComplete({
+			params: { slug: a.slug },
+			request: new Request('http://localhost/complete', {
+				method: 'POST',
+				headers: { 'content-length': String(body.length) },
+				body
+			}),
+			locals: browser
+		} as unknown as Parameters<typeof videoComplete>[0]);
 	}
 
 	/** A three-byte "video" whose every chunk has arrived and which nobody has asked to finish yet. */
@@ -211,6 +260,180 @@ describe('uploads are not lost to other people, limits or passing failures', () 
 		await expect(startVideo(a, iker, 100_000)).rejects.toMatchObject({ status: 413 });
 	});
 
+	it('a photo whose retry recorded it first is kept, even when the second copy is over the limit', async () => {
+		const a = await album(1);
+		const marta = await a.guest('Marta');
+		const image = await picture();
+		// The account is all but full: room for this photo once, not twice.
+		await db
+			.update(users)
+			.set({ usedBytes: 1024 * 1024 - image.length - 10 })
+			.where(eq(users.id, a.ownerId));
+		// A proxy timed out and the browser sent the same photo again while the first was
+		// still being processed: both are on their way at once, with the same retry key.
+		// The one that loses the race is over the limit, and used to delete the folder the
+		// winner's row points at.
+		const key = crypto.randomUUID();
+		const answers = await Promise.all([sendPhoto(a, marta, image, key), sendPhoto(a, marta, image, key)]);
+		for (const answer of answers) expect(answer).toMatchObject({ added: 1, skipped: [] });
+		const kept = await db.select().from(photos).where(eq(photos.albumId, a.albumId));
+		expect(kept).toHaveLength(1);
+		expect(kept[0].id).toBe(memberScopedId(marta.id, key));
+		expect(await storage.mediaFilesExist(kept[0].storageKey, kept[0].thumbKey)).toBe(true);
+	});
+
+	it('a video upload that went quiet must fit again when it comes back', async () => {
+		const a = await album(1); // 1 MB for everything
+		const marta = await a.guest('Marta');
+		const iker = await a.guest('Iker');
+		const started = await startVideo(a, marta, 600_000);
+		const { uploadId } = await started.json();
+		uploads.push(uploadId);
+		// Her phone slept for an hour with nothing sent: her upload holds only what arrived,
+		// and Iker's video is let into the rest.
+		await db
+			.update(uploadSessions)
+			.set({ expiresAt: new Date(Date.now() + UPLOAD_TTL_MS - UPLOAD_QUIET_MS - 60_000) })
+			.where(eq(uploadSessions.id, uploadId));
+		const his = await startVideo(a, iker, 500_000);
+		const hisId = (await his.json()).uploadId;
+		uploads.push(hisId);
+		// When her phone wakes, her upload may not simply take that space back: both could
+		// not finish, and one of them would fail at the very end. She is told now.
+		await expect(sendChunk(a, locals(marta.deviceToken), uploadId, 600_000)).rejects.toMatchObject({ status: 413 });
+		expect((await sessionOf(uploadId)).receivedBytes).toBe(0);
+		// Once his upload is cancelled the space is free again, and hers carries on.
+		await cancelVideo(a, locals(iker.deviceToken), hisId);
+		expect((await sessionOf(hisId)).state).toBe('failed');
+		expect((await sendChunk(a, locals(marta.deviceToken), uploadId, 600_000)).status).toBe(200);
+		expect((await sessionOf(uploadId)).receivedBytes).toBe(600_000);
+		await cancelVideo(a, locals(marta.deviceToken), uploadId); // nothing more to test on it
+	});
+
+	it('a video init sent again after its answer was lost gets the same upload back', async () => {
+		const a = await album();
+		const marta = await a.guest('Marta');
+		const phone = locals(marta.deviceToken);
+		const key = crypto.randomUUID();
+		const first = await (await startVideo(a, marta, 3_000, phone, key)).json();
+		uploads.push(first.uploadId);
+		// Not a second empty upload holding the quota and one of her three places.
+		expect(await (await startVideo(a, marta, 3_000, phone, key)).json()).toEqual({ ...first, duplicate: true });
+		expect(await db.select().from(uploadSessions).where(eq(uploadSessions.memberId, marta.id))).toHaveLength(1);
+		// The same key names a photo elsewhere, never this upload (whose id becomes the video's).
+		expect(first.uploadId).not.toBe(memberScopedId(marta.id, key));
+		// The key is not reused for a different file.
+		await expect(startVideo(a, marta, 4_000, phone, key)).rejects.toMatchObject({ status: 409 });
+		await cancelVideo(a, phone, first.uploadId);
+	});
+
+	it('says at once that uploads are paused, with a status the page does not retry', async () => {
+		const a = await album();
+		const marta = await a.guest('Marta');
+		const before = await getSettings();
+		await admin.saveMaintenance({ uploadsPaused: true, albumCreationPaused: before.albumCreationPaused });
+		try {
+			await expect(sendPhoto(a, marta, await picture())).rejects.toMatchObject({ status: 423 });
+			await expect(startVideo(a, marta, 3_000)).rejects.toMatchObject({ status: 423 });
+		} finally {
+			await admin.saveMaintenance({
+				uploadsPaused: before.uploadsPaused,
+				albumCreationPaused: before.albumCreationPaused
+			});
+		}
+	});
+
+	it("a browser whose account signed out cannot touch that account's video uploads", async () => {
+		const a = await album();
+		// The owner uploads from a shared laptop while signed in.
+		const laptop = { id: crypto.randomUUID(), deviceToken: crypto.randomUUID() };
+		await db.insert(members).values({ ...laptop, albumId: a.albumId, userId: a.ownerId, displayName: 'Owner' });
+		const owner = { deviceToken: laptop.deviceToken, locale: 'en', auth: async () => ({ user: { id: a.ownerId } }) };
+		const { uploadId } = await (await startVideo(a, laptop, 3, owner)).json();
+		uploads.push(uploadId);
+		// They sign out. The next person at that laptop has the same device token.
+		const next = locals(laptop.deviceToken);
+		await expect(sendChunk(a, next, uploadId, 3)).rejects.toMatchObject({ status: 403 });
+		await expect(finishVideo(a, next, uploadId)).rejects.toMatchObject({ status: 403 });
+		await cancelVideo(a, next, uploadId);
+		expect((await sessionOf(uploadId)).state).toBe('receiving');
+		// The account itself still can.
+		expect((await sendChunk(a, owner, uploadId, 3)).status).toBe(200);
+		await cancelVideo(a, owner, uploadId);
+		expect((await sessionOf(uploadId)).state).toBe('failed');
+	});
+
+	it('keeps a video when the database is away just as it is recorded, and finishes it later', async () => {
+		const a = await album();
+		const marta = await a.guest('Marta');
+		const id = await received(a, marta);
+		const lost = () => Object.assign(new Error('connection lost'), { code: 'ECONNRESET' });
+		// The answer to the insert is lost, and a moment later the database still cannot say
+		// whether it went through. The upload used to be left claimed with nobody renewing
+		// its lease, and the expiry sweep deleted every chunk half an hour later.
+		const away = vi.spyOn(PgDatabase.prototype, 'select');
+		const admit = vi.spyOn(admin, 'admitWithinQuota').mockImplementationOnce(async () => {
+			away.mockImplementationOnce(() => {
+				throw lost();
+			});
+			throw lost();
+		});
+		try {
+			expect(await startFinalization(id)).toBe('started');
+			await vi.waitFor(
+				async () => {
+					expect(finalizeRetries.get(id)?.attempt).toBe(1);
+					expect((await sessionOf(id)).state).toBe('receiving');
+				},
+				{ timeout: 15_000 }
+			);
+			expect(away).toHaveBeenCalled();
+		} finally {
+			admit.mockRestore();
+			away.mockRestore();
+		}
+		expect((await storage.readChunk(id, 0)).toString()).toBe('abc');
+		finalizeRetries.set(id, { attempt: 1, notBefore: 0 });
+		await finalizeReady();
+		await vi.waitFor(() => complete(id), { timeout: 15_000 });
+	}, 40_000);
+
+	it('uploads waiting out a pause after a failure do not hold up newer ones', async () => {
+		const a = await album();
+		const marta = await a.guest('Marta');
+		// More than a query's worth of older uploads failed for a passing reason a moment
+		// ago and are waiting to be tried again. They used to fill the whole batch.
+		const paused = Array.from({ length: 21 }, () => crypto.randomUUID());
+		for (const id of paused) {
+			await db.insert(uploadSessions).values({
+				id,
+				albumId: a.albumId,
+				momentId: a.momentId,
+				memberId: marta.id,
+				deviceToken: marta.deviceToken,
+				mime: 'video/mp4',
+				declaredBytes: 3,
+				chunkSize: 3,
+				totalChunks: 1,
+				receivedBytes: 3,
+				approved: true,
+				quality: 'original',
+				expiresAt: new Date(Date.now() + UPLOAD_TTL_MS),
+				createdAt: new Date(Date.now() - 60 * 60_000)
+			});
+			finalizeRetries.set(id, { attempt: 1, notBefore: Date.now() + 60 * 60_000 });
+		}
+		try {
+			const fresh = await received(a, marta);
+			expect(await finalizeReady()).toBeGreaterThanOrEqual(1);
+			await vi.waitFor(() => complete(fresh), { timeout: 15_000 });
+			for (const id of paused) expect((await sessionOf(id)).state).toBe('receiving');
+		} finally {
+			for (const id of paused) finalizeRetries.delete(id);
+			await db.update(uploadSessions).set({ state: 'failed' }).where(inArray(uploadSessions.id, paused));
+		}
+	}, 40_000);
+
 	it('keeps a fully uploaded video through a passing failure and finishes it later', async () => {
 		const a = await album();
 		const marta = await a.guest('Marta');
@@ -274,7 +497,7 @@ describe('uploads are not lost to other people, limits or passing failures', () 
 		try {
 			expect(await startFinalization(id)).toBe('started');
 			// While it is being put together she opens her return link on the new phone.
-			const token = returnToken(await member(zoe.id), OWNER_ISSUED_MS);
+			const token = returnToken((await returnLinkTarget(zoe.id))!, OWNER_ISSUED_MS);
 			expect(await takePlace(token, zoe.id, again.deviceToken)).toBe(true);
 			expect(await member(again.id)).toBeUndefined();
 		} finally {
@@ -308,7 +531,7 @@ describe('uploads are not lost to other people, limits or passing failures', () 
 		// the owner's lock. The sweep used to wait for it (and uploads for the sweep).
 		const began = Date.now();
 		await db.transaction(async (tx) => {
-			await tx.execute(sql`select pg_advisory_xact_lock(hashtext(${a.ownerId}))`);
+			await lockOwner(tx, a.ownerId);
 			await drainMediaDeletions();
 			expect(existsSync(storage.mediaWritePath(gone))).toBe(false);
 		});

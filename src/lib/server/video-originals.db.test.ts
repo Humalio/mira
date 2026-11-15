@@ -4,7 +4,7 @@ import { existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync 
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { eq } from 'drizzle-orm';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { saveAlbumOptions } from './album-options';
 import { db } from './db';
 import { drainMediaDeletions } from './media-deletions';
@@ -374,7 +374,9 @@ describe.skipIf(!enabled)('a video keeps its original beside the playback copy',
 
 		const recovery = await resumeInterruptedFinalizations();
 		expect(recovery.resumed).toBeGreaterThanOrEqual(1);
-		await recovery.done;
+		// Back in the queue, it is started by a free finaliser like any waiting upload.
+		const stateOf = async () => (await db.select().from(uploadSessions).where(eq(uploadSessions.id, session.id)))[0];
+		await vi.waitFor(async () => expect((await stateOf()).state).toBe('complete'), { timeout: 90_000, interval: 250 });
 
 		const [video] = await db.select().from(photos).where(eq(photos.id, session.id));
 		const copy = mediaWritePath(`${a.slug}/${session.id}/opt.mp4`);

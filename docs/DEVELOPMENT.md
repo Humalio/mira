@@ -8,7 +8,9 @@ See [contributing](../CONTRIBUTING.md) for commands and commit conventions.
 `npm run db:init` creates the day-zero schema on an empty database. It executes
 `database/schema.sql` atomically, including constraints, indexes and the storage
 counter triggers. A schema fingerprint identifies completed setup; repeat startup
-is a no-op. Setup refuses unrelated or older development databases and never
+is a no-op. The fingerprint ignores SQL comments and whitespace, so editing only those
+in `schema.sql` does not stop existing databases from starting; any other edit does.
+Setup refuses unrelated or older development databases and never
 rewrites or deletes existing application records.
 
 `src/lib/server/schema.ts` provides Drizzle's runtime types and query definitions.

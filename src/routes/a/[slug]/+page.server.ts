@@ -8,8 +8,9 @@ import { distinctNames } from '#lib/names.js';
 import { albums, favorites, members, moments, photos } from '#lib/server/schema.js';
 import { getAlbumOptions, saveAlbumOptions, settingsUnavailable } from '#lib/server/album-options.js';
 import { inviteUrl, resetInvitation } from '#lib/server/invite.js';
-import { OWNER_ISSUED_MS, SELF_ISSUED_MS, canReturn, returnToken } from '#lib/server/return-link.js';
+import { OWNER_ISSUED_MS, SELF_ISSUED_MS, canReturn, returnLinkTarget, returnToken } from '#lib/server/return-link.js';
 import { albumStamp, preparingVideos } from '#lib/server/pulse.js';
+import { lockMomentCreate } from '#lib/server/locks.js';
 import { mediaAbsPath } from '#lib/server/storage.js';
 import { publicOrigin } from '#lib/server/origin.js';
 import { originalKept, playbackKey } from '#lib/server/video.js';
@@ -38,6 +39,9 @@ export const load: PageServerLoad = async ({ parent, url }) => {
 		.from(photos)
 		.where(visibleMedia);
 	const lastPage = Math.max(1, Math.ceil((summary?.total ?? 0) / pageSize));
+	// Someone arriving without `?page` starts on the newest page. An open page writes the
+	// page it shows into its address before it first reloads (see `reload` in +page.svelte),
+	// so a reader is not moved when the album grows past another page.
 	const requestedPage = Number(url.searchParams.get('page'));
 	const mediaPage =
 		Number.isSafeInteger(requestedPage) && requestedPage > 0 && requestedPage <= 1000
@@ -305,10 +309,7 @@ export const actions: Actions = {
 		const memberId = requiredUuid((await request.formData()).get('memberId'), 'Member id');
 		const self = memberId === caller.id;
 		if (!self && !(await isAlbumOwner(album, locals))) throw error(403, translator(locals.locale)('srv.ownerOnly'));
-		const [target] = await db
-			.select()
-			.from(members)
-			.where(and(eq(members.id, memberId), eq(members.albumId, album.id)));
+		const target = await returnLinkTarget(memberId, album.id);
 		if (!target || !canReturn(target)) throw error(400, translator(locals.locale)('srv.returnGuestsOnly'));
 		const link = `${publicOrigin(url)}/r/${returnToken(target, self ? SELF_ISSUED_MS : OWNER_ISSUED_MS)}`;
 		return {
@@ -338,7 +339,7 @@ export const actions: Actions = {
 		}
 
 		await db.transaction(async (tx) => {
-			await tx.execute(sql`select pg_advisory_xact_lock(hashtext(${`moment-create:${album.id}`}))`);
+			await lockMomentCreate(tx, album.id);
 			const max = await tx
 				.select({ m: sql<number>`coalesce(max(${moments.position}), -1)` })
 				.from(moments)

@@ -6,14 +6,37 @@ import {
 	DEFAULT_SKIN,
 	SKINS,
 	TEXT_CONTRAST,
+	THEMES,
 	blend,
 	contrastRatio,
 	getSkin,
 	normalizeTheme,
 	readableAccent,
+	readableInk,
 	resolveTokens,
 	tokensToStyle
 } from './skins';
+
+// Accents an owner might pick: pale, dark, saturated, the skins' own, and a full grey ramp
+// (mid-greys are where neither black nor white text reads well).
+const OWNER_ACCENTS = [
+	'#ffffff',
+	'#000000',
+	'#ffee00',
+	'#4f8cff',
+	'#ff6b6b',
+	'#deb878',
+	'#123',
+	'#2e7d32',
+	'#c8862a',
+	'#8a2be2',
+	'#b0c4de',
+	...Object.values(SKINS).map((s) => s.tokens.accent),
+	...Array.from({ length: 16 }, (_, i) => '#' + (i * 17).toString(16).padStart(2, '0').repeat(3))
+];
+
+// Every surface text sits on: the page, cards and sheets, inset panels and rows.
+const surfaces = (id: string) => [SKINS[id].tokens.bg, SKINS[id].tokens.surface, SKINS[id].tokens.surface2];
 
 describe('getSkin', () => {
 	it('falls back to the default for anything that is not a skin, built-in object keys included', () => {
@@ -74,6 +97,81 @@ describe('accent as text', () => {
 		expect(readFileSync('src/app.css', 'utf8')).toContain(`var(--accent) ${BAR_TINT * 100}%, transparent`);
 		// Pages outside an album (home, admin, errors) only have the :root defaults.
 		expect(readFileSync('src/app.css', 'utf8')).toContain(`--accent-text: ${tokens.accentText};`);
+	});
+});
+
+describe('text on an accent fill', () => {
+	it("keeps each skin's own ink with its own accent, and that ink is readable", () => {
+		for (const id of Object.keys(SKINS)) {
+			const tokens = resolveTokens(id);
+			expect(tokens.accentInk, id).toBe(SKINS[id].tokens.accentInk);
+			expect(contrastRatio(tokens.accentInk, tokens.accent), id).toBeGreaterThanOrEqual(TEXT_CONTRAST);
+		}
+	});
+
+	it('stays readable (AA) on buttons whatever accent the owner picks', () => {
+		for (const id of Object.keys(SKINS)) {
+			for (const theme of THEMES) {
+				for (const accent of OWNER_ACCENTS) {
+					const tokens = resolveTokens(id, accent, theme);
+					expect(contrastRatio(tokens.accentInk, accent), `${id} ${theme} ${accent}`).toBeGreaterThanOrEqual(
+						TEXT_CONTRAST
+					);
+				}
+			}
+		}
+	});
+
+	it("prefers the skin's colours, and falls back to the skin's ink for junk", () => {
+		// Plum on pale sand already reads.
+		expect(readableInk('#deb878', '#38243d', ['#302833', '#fffefb'])).toBe('#38243d');
+		// Plum on navy does not; the card colour does.
+		expect(readableInk('#112233', '#38243d', ['#302833', '#fffefb'])).toBe('#fffefb');
+		expect(readableInk('not-a-colour', '#38243d', ['#fffefb'])).toBe('#38243d');
+	});
+
+	it('is serialised for the page and matches the stylesheet default', () => {
+		const tokens = resolveTokens(DEFAULT_SKIN);
+		expect(tokensToStyle(tokens)).toContain(`--accent-ink:${tokens.accentInk}`);
+		expect(readFileSync('src/app.css', 'utf8')).toContain(`--accent-ink: ${tokens.accentInk};`);
+	});
+});
+
+describe('muted text', () => {
+	it('is readable (AA) on every surface and the filter bar, for every skin', () => {
+		for (const id of Object.keys(SKINS)) {
+			const tokens = resolveTokens(id);
+			for (const bg of [...surfaces(id), blend(tokens.bg, tokens.accent, BAR_TINT)]) {
+				expect(contrastRatio(tokens.muted, bg), `${id} muted on ${bg}`).toBeGreaterThanOrEqual(TEXT_CONTRAST);
+			}
+		}
+	});
+
+	it('matches the stylesheet defaults, light and dark', () => {
+		const css = readFileSync('src/app.css', 'utf8');
+		const dark = css.slice(css.indexOf(":root[data-theme='dark']"));
+		expect(css).toContain(`--muted: ${resolveTokens(DEFAULT_SKIN).muted};`);
+		expect(dark).toContain(`--muted: ${resolveTokens(DEFAULT_SKIN, null, 'dark').muted};`);
+	});
+});
+
+describe('danger text', () => {
+	it('is readable (AA) on every surface of every skin', () => {
+		for (const id of Object.keys(SKINS)) {
+			const tokens = resolveTokens(id);
+			for (const bg of surfaces(id)) {
+				expect(contrastRatio(tokens.dangerText, bg), `${id} danger on ${bg}`).toBeGreaterThanOrEqual(TEXT_CONTRAST);
+			}
+		}
+	});
+
+	it('is serialised for the page and matches the stylesheet defaults, light and dark', () => {
+		const css = readFileSync('src/app.css', 'utf8');
+		const dark = css.slice(css.indexOf(":root[data-theme='dark']"));
+		const light = resolveTokens(DEFAULT_SKIN);
+		expect(tokensToStyle(light)).toContain(`--danger-text:${light.dangerText}`);
+		expect(css.slice(0, css.indexOf(":root[data-theme='dark']"))).toContain(`--danger-text: ${light.dangerText};`);
+		expect(dark).toContain(`--danger-text: ${resolveTokens(DEFAULT_SKIN, null, 'dark').dangerText};`);
 	});
 });
 

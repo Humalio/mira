@@ -4,6 +4,7 @@ import { db } from '#lib/server/db.js';
 import { deleteAlbum } from '#lib/server/admin.js';
 import { getAlbumOptions, saveAlbumOptions, settingsUnavailable } from '#lib/server/album-options.js';
 import { getAlbum } from '#lib/server/guard.js';
+import { lockOwner } from '#lib/server/locks.js';
 import { albums, members, moments, photos } from '#lib/server/schema.js';
 import { getSettings } from '#lib/server/users.js';
 import { LIMITS, requireContentLength, requiredText } from '#lib/server/input.js';
@@ -145,7 +146,7 @@ export const actions: Actions = {
 				await db.transaction(async (tx) => {
 					// The owner id is the shared lock key for album creation/deletion and
 					// quota admission, so account deletion cannot race a new album into existence.
-					await tx.execute(sql`select pg_advisory_xact_lock(hashtext(${ownerUserId}))`);
+					await lockOwner(tx, ownerUserId);
 					if (settings.maxAlbumsPerUser > 0) {
 						const [{ c }] = await tx
 							.select({ c: sql<number>`count(*)::int` })

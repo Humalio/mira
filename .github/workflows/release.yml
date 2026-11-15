@@ -31,45 +31,45 @@ jobs:
           set -eu
           printf '%s' "$VERSION" | grep -Eq '^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$'
           git check-ref-format "refs/tags/v$VERSION"
+          IMAGE="ghcr.io/$(printf '%s' "$GITHUB_REPOSITORY" | tr '[:upper:]' '[:lower:]')"
+          printf 'IMAGE=%s\n' "$IMAGE" >> "$GITHUB_ENV"
+          # Versions are never reused. Refuse one that already has a tag...
           test "$(gh api "repos/$GITHUB_REPOSITORY/git/matching-refs/tags/v$VERSION" --jq 'length')" = 0
-          printf 'IMAGE=ghcr.io/%s\n' "${GITHUB_REPOSITORY,,}" >> "$GITHUB_ENV"
-      - name: Verify source and smoke-test the production image
-        run: sh scripts/verify-release.sh
-      - uses: docker/setup-buildx-action@v4
-      - uses: docker/login-action@v4
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ github.token }}
-      - name: Publish the verified Intel/AMD image
-        id: image
-        uses: docker/build-push-action@v7
-        with:
-          context: .
-          platforms: linux/amd64
-          push: true
-          tags: |
-            ${{ env.IMAGE }}:${{ inputs.version }}
-            ${{ env.IMAGE }}:sha-${{ github.sha }}
-          labels: |
-            org.opencontainers.image.version=${{ inputs.version }}
-            org.opencontainers.image.revision=${{ github.sha }}
-            org.opencontainers.image.source=https://github.com/${{ github.repository }}
-      - name: Create draft release with installation files and notes
-        env:
-          DIGEST: ${{ steps.image.outputs.digest }}
+          # ...a release, published or draft (a draft has no tag until it is published)...
+          RELEASES=$(gh api --paginate "repos/$GITHUB_REPOSITORY/releases?per_page=100" \
+            --jq ".[] | select(.tag_name == \"v$VERSION\" or .name == \"Mira $VERSION\") | .html_url")
+          if [ -n "$RELEASES" ]; then
+            echo "::error::Mira $VERSION already has a release (drafts included): $RELEASES"
+            exit 1
+          fi
+          # ...or an image on GHCR, such as one pushed by a run that failed before its draft.
+          REPOSITORY="${IMAGE#ghcr.io/}"
+          TOKEN=$(curl -fsS -u "$GITHUB_ACTOR:$GH_TOKEN" "https://ghcr.io/token?service=ghcr.io&scope=repository:$REPOSITORY:pull,push" \
+            | python3 -c 'import json, sys; print(json.load(sys.stdin)["token"])')
+          STATUS=$(curl -sS -o /dev/null -w '%{http_code}' --head -H "Authorization: Bearer $TOKEN" \
+            -H 'Accept: application/vnd.oci.image.index.v1+json, application/vnd.oci.image.manifest.v1+json, application/vnd.docker.distribution.manifest.list.v2+json, application/vnd.docker.distribution.manifest.v2+json' \
+            "https://ghcr.io/v2/$REPOSITORY/manifests/$VERSION")
+          case "$STATUS" in
+            404) ;;
+            200) echo "::error::$IMAGE:$VERSION is already on GHCR"; exit 1 ;;
+            *) echo "::error::Could not check GHCR for $IMAGE:$VERSION (HTTP $STATUS)"; exit 1 ;;
+          esac
+      # Checked before anything is built or pushed, so a missing changelog entry cannot leave
+      # a published image behind without a release.
+      - name: Prepare release notes and installation files
         run: |
           set -eu
+          mkdir "$RUNNER_TEMP/release"
           python3 - <<'PY'
           import os, pathlib, re
+          out = pathlib.Path(os.environ['RUNNER_TEMP'], 'release')
           changelog = pathlib.Path('CHANGELOG.md').read_text()
           section = re.search(r'(?ms)^## \[Unreleased\]\s*\n(.*?)(?=^## |\Z)', changelog)
           if not section or not section.group(1).strip():
               raise SystemExit('Add user-facing notes to CHANGELOG.md under ## [Unreleased] before releasing')
-          notes = section.group(1).strip()
-          image, version, digest = (os.environ[k] for k in ('IMAGE', 'VERSION', 'DIGEST'))
-          notes += f'\n\n### Docker image\n\n`{image}:{version}`\n\nImmutable digest: `{image}@{digest}`\n\nDownload the Compose file and environment example below. See [deployment instructions](https://github.com/{os.environ["GITHUB_REPOSITORY"]}/blob/{os.environ["GITHUB_SHA"]}/docs/DEPLOYMENT.md).\n'
-          pathlib.Path('release-notes.md').write_text(notes)
+          # The Docker image section, with the digest, is added once the image is pushed.
+          (out / 'release-notes.md').write_text(section.group(1).strip())
+          image, version = (os.environ[k] for k in ('IMAGE', 'VERSION'))
           compose = pathlib.Path('deploy/compose.prod.yaml').read_text().replace('../.env', '.env')
           # The source Compose file (shown on the website too) names the release it runs by
           # default; it must be this release, or a fresh install would run another one.
@@ -79,12 +79,50 @@ jobs:
           compose, pinned = re.subn(r'(?m)^(\s*image:\s*)\$\{[A-Z_]*IMAGE(?::-[^}]*)?\}\s*$', lambda match: f'{match[1]}{image}:{version}', compose)
           if pinned != 1:
               raise SystemExit('deploy/compose.prod.yaml: expected exactly one application image line to pin')
-          pathlib.Path('compose.yaml').write_text(compose)
+          (out / 'compose.yaml').write_text(compose)
           example = pathlib.Path('.env.example').read_text()
           example, pinned = re.subn(r'(?m)^#?\s*([A-Z_]*IMAGE)=.*$', lambda match: f'{match[1]}={image}:{version}', example)
           if pinned != 1:
               raise SystemExit('.env.example: expected exactly one image setting to pin')
-          pathlib.Path('environment.example').write_text(example)
-          pathlib.Path('release-CHANGELOG.md').write_text(changelog.replace('## [Unreleased]', f'## [{version}]', 1))
+          (out / 'environment.example').write_text(example)
+          (out / 'release-CHANGELOG.md').write_text(changelog.replace('## [Unreleased]', f'## [{version}]', 1))
           PY
-          gh release create "v$VERSION" --target "$GITHUB_SHA" --draft --title "Mira $VERSION" --notes-file release-notes.md compose.yaml environment.example release-CHANGELOG.md
+      - name: Verify source and smoke-test the production image
+        run: sh scripts/verify-release.sh
+      # Built once, then scanned, booted and pushed as it is: what is published is the image
+      # that was checked, not a rebuild of it.
+      - name: Build the release image, scan it and boot it
+        run: |
+          set -eu
+          docker build --platform linux/amd64 \
+            --label "org.opencontainers.image.version=$VERSION" \
+            --label "org.opencontainers.image.revision=$GITHUB_SHA" \
+            --label "org.opencontainers.image.source=https://github.com/$GITHUB_REPOSITORY" \
+            -t "$IMAGE:$VERSION" -t "$IMAGE:sha-$GITHUB_SHA" .
+          # The private build's scan: fail only on HIGH or CRITICAL findings that an updated
+          # package can fix. Trivy reads the image from this runner's Docker daemon.
+          docker run --rm -v /var/run/docker.sock:/var/run/docker.sock aquasec/trivy:0.66.0 image --severity HIGH,CRITICAL \
+            --ignore-unfixed --exit-code 1 --quiet "$IMAGE:$VERSION"
+          # Boot this exact image against a throwaway database.
+          sh scripts/image-smoke.sh "$IMAGE:$VERSION"
+      - uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+      - name: Publish the checked Intel/AMD image
+        run: |
+          set -eu
+          docker push "$IMAGE:$VERSION"
+          docker push "$IMAGE:sha-$GITHUB_SHA"
+          # The registry's digest of the image just pushed, for the release notes.
+          DIGEST_REF=$(docker image inspect --format '{{range .RepoDigests}}{{println .}}{{end}}' "$IMAGE:$VERSION" | grep -m 1 "^$IMAGE@sha256:")
+          printf 'DIGEST_REF=%s\n' "$DIGEST_REF" >> "$GITHUB_ENV"
+      - name: Create draft release with installation files and notes
+        run: |
+          set -eu
+          RELEASE="$RUNNER_TEMP/release"
+          printf '\n\n### Docker image\n\n`%s:%s`\n\nImmutable digest: `%s`\n\nDownload the Compose file and environment example below. See [deployment instructions](https://github.com/%s/blob/%s/docs/DEPLOYMENT.md).\n' \
+            "$IMAGE" "$VERSION" "$DIGEST_REF" "$GITHUB_REPOSITORY" "$GITHUB_SHA" >> "$RELEASE/release-notes.md"
+          gh release create "v$VERSION" --target "$GITHUB_SHA" --draft --title "Mira $VERSION" --notes-file "$RELEASE/release-notes.md" \
+            "$RELEASE/compose.yaml" "$RELEASE/environment.example" "$RELEASE/release-CHANGELOG.md"

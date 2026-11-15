@@ -33,7 +33,7 @@ services:
         required: false
     environment:
       ORIGIN: ${ORIGIN:-http://localhost:5180} # adapter-node CSRF origin; must match the browser URL
-      PUBLIC_ORIGIN: ${PUBLIC_ORIGIN:-http://localhost:5180}
+      PUBLIC_ORIGIN: ${PUBLIC_ORIGIN:-${ORIGIN:-http://localhost:5180}} # follows ORIGIN unless set
       AUTH_SECRET: ${AUTH_SECRET:?set a 32+ character AUTH_SECRET for production-image preview}
       MIRA_ADMIN_IDENTITIES: ${MIRA_ADMIN_IDENTITIES:-} # no automatic admin on preview
       MIRA_ADMIN_PASSWORD: ${MIRA_ADMIN_PASSWORD:-}

@@ -2,12 +2,28 @@
 	// Any Lucide icon component; they all share a single prop signature.
 	type IconComponent = typeof import('@lucide/svelte').Heart;
 	type Option = { value: string; label: string; icon?: IconComponent };
-	let { value = $bindable(), options }: { value: string; options: Option[] } = $props();
+	let {
+		value = $bindable(),
+		options,
+		label
+	}: {
+		value: string;
+		options: Option[];
+		/** What the choice is about, for screen readers when no visible label names it. */
+		label?: string;
+	} = $props();
 </script>
 
-<div class="seg">
+<!-- A row of toggle buttons, one pressed: aria-pressed says which, since the highlight
+     alone is invisible to a screen reader. -->
+<div class="seg" role="group" aria-label={label}>
 	{#each options as o (o.value)}
-		<button type="button" class:on={value === o.value} onclick={() => (value = o.value)}>
+		<button
+			type="button"
+			class:on={value === o.value}
+			aria-pressed={value === o.value}
+			onclick={() => (value = o.value)}
+		>
 			{#if o.icon}{@const Icon = o.icon}<Icon size={16} />{/if}{o.label}
 		</button>
 	{/each}
